@@ -1,0 +1,38 @@
+version: '3.3'
+services:
+  #web:
+  #  image: lifeloopweb
+  #  build: .
+  #  env_file: .env
+  #  environment:
+  #    - FLASK_APP=lifeloopweb/lifeloopweb_app.py
+  #    - FLASK_DEBUG=1
+  #  ports:
+  #    - "5000:5000"
+  #  volumes:
+  #    - ./lifeloopweb:/code/lifeloopweb
+  #  depends_on:
+  #    - database
+  #  command: /code/web_entrypoint.sh
+  #database:
+  #  image: percona
+  #  volumes:
+  #    - ./database_data:/var/lib/mysql
+  #  ports:
+  #    - "3306:3306"
+  #  environment:
+  #    - MYSQL_ALLOW_EMPTY_PASSWORD=1
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "8025:8025"
+  etcd:
+    image: elcolio/etcd:latest
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+      - "4001:4001"
+      - "7001:7001"
+    volumes:
+      - ./etcd_data:/data
+    command: -name=etcd-cluster
