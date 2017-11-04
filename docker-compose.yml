@@ -6,27 +6,24 @@ services:
     environment:
       - FLASK_APP=babymailgun/app.py
       - FLASK_DEBUG=1
+      - DB_HOST=database
+      - DB_PORT=27017
+      - DB_NAME=babymailgun
     ports:
       - "5000:5000"
     volumes:
       - ./python_src/babymailgun:/code/babymailgun
-  #  depends_on:
-  #   - database
+    depends_on:
+     - database
     command: dockerize -timeout 60s -wait tcp://database:27017 flask run -h 0.0.0.0 -p5000 --reload
-  #database:
-  #  image: percona
-  #  volumes:
-  #    - ./database_data:/var/lib/mysql
-  #  ports:
-  #    - "3306:3306"
-  #  environment:
-  #    - MYSQL_ALLOW_EMPTY_PASSWORD=1
   mailhog:
     image: mailhog/mailhog
     ports:
       - "8025:8025"
   database:
     image: mongo:3.2
+    ports:
+      - "27017:27017"
     volumes:
       - ./mongo_data/db:/data/db
       - ./mongo_data/configdb:/data/configdb

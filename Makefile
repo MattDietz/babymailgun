@@ -1,12 +1,5 @@
-# It would be snazzy if we either had a tool that could autodiscover possible
-# tasks available in the project or be able to generate them as part of the
-# initial scaffolding
 -include .env
 
-# -e says exit immediately when a command fails
-# -o sets pipefail, meaning if it exits with a failing command, the exit code should be of the failing command
-# -u fails a bash script immediately if a variable is unset
-# -x prints every command before running it
 SHELL = /bin/bash -eu -o pipefail
 DOCKER := docker
 DOCKER_BUILD := $(DOCKER) build -t
