@@ -42,6 +42,13 @@ Brainstorm:
 - pyenv lockfile in the basedir
 - If implementing API auth, quick bootstrap script that runs with the container build process
 - Come up with two plans 1) What I would do with infinite time 2) and what I'm going to implement for the purposes of this
+- Don't forget CC and BCC fields
+- All 400 email codes are soft bounces and can be retried, all 500 codes are hard and should be skipped on retry
+  - Pedantically untrue. https://martech.zone/soft-hard-email-bounce-codes/ Some of these hard bounces could resolve later
+- Workers heartbeat in the db periodically. If a worker owns a job and we haven't seen a heartbeat in X, we reclaim
+- One worker could create a pool and run hundreds of email jobs in goroutines, maybe do this if it's not too complex
+  - At least one goroutine to do heartbeat, no reason we couldn't pick up work and farm it out to goroutines in others
+
 
 
 API:
@@ -50,27 +57,58 @@ GET /tokens - Returns token validity
 POST /emails {json body of email data model}, returns an ID
 GET /emails/<id> - look up the status of an email based on ID
 
+Data Model:
+
+Email
+{
+  Headers []string,
+  Subject string,
+  Body string,
+  Sender string,
+  Recipients: [
+    {
+      Email string,
+      StatusCode int,
+      StatusReason string
+    }
+  ] 
+  CreatedAt DateTime,
+  UpdatedAt DateTime,
+  Status Enum {Incomplete, Complete, Failed}
+  StatusReason string <-- The whole email can fail (too many recipients, for example)
+  Tries int,
+  WorkerId string (uuid), <-- Current owner of this email
+}
+
+Worker
+{
+  HostName string
+  IP string
+  LastCheckin DateTime
+  Checkins int
+}
+
+Email: Base model. Tracks the object represented by the API call
+EmailRecipient: status tracking model. 
 
 Workflow:
+POST /token and get token
+POST /emails with token and email body
+  -> write to datastore
+Workers are watching the database:
+  -> Worker wakes up and queries for any Incomplete jobs
+    -> SELECT * from emails where worker is NULL and status = "incomplete" and last_updated_at >= 10 minutes ago
+  -> Worker picks the top one and atomically assigns itself to it:
+    -> UPDATE emails set worker = <id> where last_updated_at = $TIMESTAMP_FROM_FIRST_QUERY and worker = NULL or other db equivalent (mongo findAndModify)
+  -> Handshake and send email
+  -> For each email (per recipient) that succeeds, update datastore with success
+  -> For each email that fails (per recipient basis), update datastore with failure
+  -> If there are any failures during sending, update the tries count.
+  -> If tries == 3, update status to "Failed"
+  -> Always set updated_at to NOW()
+  -> Always clear worker field
+  # Each ESP has different send rates. Ideally you'd break the emails down by domain and queue those
+  -> Go back to sleep for some configurable interval
 
-1)
-POST /tokens {username: "foo", password: "bar"}
-POST /emails Header: Authorization: Bearer $TOKEN {"Subject": "subject", "Body": 
-API writes SendEmail to "jobs" key in datastore
-One of the N workers picks up the change to the "jobs" key and notes it's a "SendEmail" type
-Worker authenticates with an smtp server from the servers key ( there would be an LB in front of these in the real world )
-
-
-
-Data Model:
-{
-  Subject,
-  Body,
-  Sender,
-  Recipient,
-  CreatedAt,
-  UpdatedAt,
-  Status,
-  Reason,  <-- Human-readable status field
-  Tries,
-
+Email delivery or failure, writing the status back:
+  
