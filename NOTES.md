@@ -27,15 +27,12 @@ Brainstorm:
   - Plenty of locking semantics for the workers "owning" an email and controlling status
   - Alternatively, I like the idea of "central" services that lock and control everything, and ancillary services that just
     report back to the core service. Downside is there are some scalability issues (but it's all async API, so it's Load Balanceable)
-  - Etcd v5
 - N workers to send emails (Maybe these could be in Go)
   - These should be blazing fast and lightweight.
   - Clear need for an async piece, as there's an implied retry loop above with a configurable interval
 - Mailhog container for receiving emails and vetting they work
 - Need a simple SMTP driver to send an email elsewhere too
 - Make sure to include tests
-- GRPC from workers to service API
-- RAML?
 - Container build generates a self-signed cert and auth is exposed through SSL
 - Auth on the client API
   - JSON Web Tokens for sending an email?
