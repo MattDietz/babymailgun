@@ -34,7 +34,7 @@ def send(sender, to, cc, bcc, subject, body):
 
     to = list(to)
     data = json.dumps({"subject": subject, "from": sender,
-                       "to": to, "cc": cc, "bcc": bcc, "body": body})
+                       "to": to, "cc": cc, "bcc": bcc, "body": email_body})
     headers = {"Content-Type": "application/json",
                "Accept": "application/json"}
     resp = requests.post("http://127.0.0.1:5000/emails", headers=headers,
