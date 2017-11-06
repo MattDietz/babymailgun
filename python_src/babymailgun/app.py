@@ -85,6 +85,7 @@ def list_emails():
     table.field_names = ["Id", "Sender", "Status", "Reason",
                          "Created", "Updated", "Sending Attempts"]
     for email in db.emails.find():
+        app.logger.info(email)
         table.add_row([email["_id"], email["sender"], email["status"],
                        email["status_reason"], email["created_at"],
                        email["updated_at"], email["tries"]])
