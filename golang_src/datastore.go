@@ -14,18 +14,18 @@ type EmailRecipients struct {
 }
 
 type Email struct {
-	ID      string `_id`
-	Subject string
-	Body    string
-	EmailRecipients
-	MailFrom  []string
-	MailTo    []string
-	CreatedAt string // Go to Golang date
-	UpdatedAt string // Go to Golang date
-	Status    string // Should be an emum
-	Reason    string
-	Tries     int
-	WorkerId  string `worker_id`
+	ID         string `_id`
+	Subject    string
+	Body       string
+	Recipients []EmailRecipients
+	MailFrom   []string
+	MailTo     []string
+	CreatedAt  string // Go to Golang date
+	UpdatedAt  string // Go to Golang date
+	Status     string // Should be an emum
+	Reason     string
+	Tries      int
+	WorkerId   string `worker_id`
 }
 
 type MongoClient struct {
