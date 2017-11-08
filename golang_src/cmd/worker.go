@@ -58,15 +58,16 @@ loop:
 			mc := babymailgun.MailConfig{MailHost: cfg.MailHost, MailPort: cfg.MailPort, AdminEmail: cfg.AdminEmail}
 			if err = babymailgun.SendMail(&mc, email); err != nil {
 				fmt.Println("Email sending failed ", err)
-				// TODO Write this to the datastore
+				// TODO Set the reason on the update document
 				// TODO Some errors are definitely catastrophic
 			}
-			// Update the email status
+			// Process the email response to see if any recipients failed and create
+			// and update document. Additionally, "release" the email by setting the
+			// worker_id to nil
 
-			// Release the email
-			log.Printf("Releasing email %s\n", email.ID)
-			if err := mongoClient.ReleaseEmail(email); err != nil {
-				// TODO Couldn't release the email, what do we do?
+			log.Printf("Updating and releasing email %s\n", email.ID)
+			if err := mongoClient.UpdateEmail(email); err != nil {
+				// TODO Couldn't update the email, what do we do?
 				log.Println(err)
 			}
 		} else {
