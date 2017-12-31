@@ -8,21 +8,37 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
 type WorkerConfig struct {
-	Host         string
-	Port         string
-	DatabaseName string
-	WorkerSleep  int
-	WorkerPool   int
-	MailHost     string
-	MailPort     string
-	AdminEmail   string
+	Host              string
+	Port              string
+	DatabaseName      string
+	WorkerSleep       int
+	WorkerPool        int
+	MailHost          string
+	MailPort          string
+	AdminEmail        string
+	ConnectionTimeout int
+	ConnectionRetries int
+	EmailRetries      int
+	RetryInterval     int // in seconds
 }
+
+const (
+	InvalidRecipientError    string = "550 Invalid recipient"
+	UnrecognizedCommandError string = "500 Unrecognised command"
+	EOFError                 string = "EOF"
+)
+
+const (
+	InvalidRecipientStatus    = 550
+	UnrecognizedCommandStatus = 500
+)
 
 // Create a UUID4. Source implementation here: https://groups.google.com/forum/#!msg/golang-nuts/d0nF_k4dSx4/rPGgfXv6QCoJ
 func uuid() string {
@@ -41,41 +57,76 @@ func processingLoop(cfg *WorkerConfig, wg *sync.WaitGroup, quit <-chan bool) {
 	log.Println("Starting processing loop...")
 	workerId := uuid()
 	defer wg.Done()
+	mc := babymailgun.MailConfig{MailHost: cfg.MailHost, MailPort: cfg.MailPort, AdminEmail: cfg.AdminEmail}
+	mongoClient := babymailgun.MongoClient{Host: cfg.Host, Port: cfg.Port, DatabaseName: cfg.DatabaseName,
+		ConnectionTimeout: cfg.ConnectionTimeout, ConnectionRetries: cfg.ConnectionRetries}
+
 loop:
 	for {
-		mongoClient := babymailgun.MongoClient{Host: cfg.Host, Port: cfg.Port, DatabaseName: cfg.DatabaseName}
 		select {
 		case <-quit:
 			log.Printf("Worker goroutine received quit")
+			mongoClient.CleanUp()
 			break loop
 		default:
-			log.Println("Waking up and looking for emails to send")
+			log.Println("Looking for emails to send")
 		}
-		email, err := mongoClient.FetchReadyEmail(workerId)
-		if err == nil {
+		email := mongoClient.FetchReadyEmail(workerId)
+		if email != nil {
 			log.Printf("Got email %s Worker ID: %s\n", email.ID, workerId)
+
 			// Try to send the email
-			mc := babymailgun.MailConfig{MailHost: cfg.MailHost, MailPort: cfg.MailPort, AdminEmail: cfg.AdminEmail}
-			if err = babymailgun.SendMail(&mc, email); err != nil {
+			emailUpdate := babymailgun.EmailUpdate{}
+			if err := babymailgun.SendMail(&mc, email); err != nil {
 				fmt.Println("Email sending failed ", err)
-				// TODO Set the reason on the update document
-				// TODO Some errors are definitely catastrophic
+				errStr := err.Error()
+
+				if strings.HasPrefix(errStr, InvalidRecipientError) {
+					// This is a catastrophic failure. The server says our recipient doesn't exist
+					failedEmail := errStr[len(InvalidRecipientError)+1:]
+					for _, rcpt := range email.Recipients {
+						if rcpt.Address == failedEmail {
+							rcpt.Status = InvalidRecipientStatus
+							rcpt.StatusReason = InvalidRecipientError
+						}
+						emailUpdate.Recipients = append(emailUpdate.Recipients, rcpt)
+					}
+					emailUpdate.Status = babymailgun.StatusFailed
+					emailUpdate.Reason = babymailgun.ReasonInvalidRecipient
+				}
+
+				if strings.HasPrefix(errStr, UnrecognizedCommandError) {
+					// This is an auth failure. This may be catastrophic, but we'll retry since it could
+					// be a function of load. In other words, we don't know how it's actually handling auth
+					// on the server side, and the referring service could be down temporarily
+					emailUpdate.Status = babymailgun.StatusIncomplete
+					emailUpdate.Reason = babymailgun.ReasonUnrecognizedCommand
+				}
+
+				if strings.HasPrefix(errStr, EOFError) {
+					// this is potentially a temporary failure, and the message should be retried
+					emailUpdate.Status = babymailgun.StatusIncomplete
+					emailUpdate.Reason = babymailgun.ReasonEOF
+				}
+				if emailUpdate.Status == babymailgun.StatusIncomplete {
+					emailUpdate.Tries = email.Tries + 1
+					if emailUpdate.Tries >= cfg.EmailRetries {
+						emailUpdate.Status = babymailgun.StatusFailed
+					}
+				}
+			} else {
+				emailUpdate.Status = babymailgun.StatusComplete
 			}
+
 			// Process the email response to see if any recipients failed and create
 			// and update document. Additionally, "release" the email by setting the
 			// worker_id to nil
-
 			log.Printf("Updating and releasing email %s\n", email.ID)
-			if err := mongoClient.UpdateEmail(email); err != nil {
-				// TODO Couldn't update the email, what do we do?
-				log.Println(err)
-			}
+			mongoClient.UpdateEmail(email, &emailUpdate)
 		} else {
-			log.Printf("Error while fetching emails: %s, %t\n", err, err)
+			log.Printf("Going back to sleep for %d seconds\n", cfg.WorkerSleep)
+			time.Sleep(time.Duration(cfg.WorkerSleep) * time.Second)
 		}
-
-		log.Printf("Going back to sleep for %d seconds\n", cfg.WorkerSleep)
-		time.Sleep(time.Duration(cfg.WorkerSleep) * time.Second)
 	}
 	log.Println("Finishing up...")
 }
@@ -84,30 +135,43 @@ func loadConfig() *WorkerConfig {
 	viper.BindEnv("DB_HOST")
 	viper.BindEnv("DB_PORT")
 	viper.BindEnv("DB_NAME")
-	viper.SetDefault("WORKER_SLEEP", 2)
 	viper.BindEnv("WORKER_SLEEP")
-	viper.SetDefault("WORKER_POOL", 5)
-	viper.SetDefault("MAIL_PORT", 25)
 	viper.BindEnv("WORKER_POOL")
 	viper.BindEnv("MAIL_HOST")
 	viper.BindEnv("MAIL_PORT")
 	viper.BindEnv("ADMIN_EMAIL")
+	viper.BindEnv("CONNECTION_RETRIES")
+	viper.BindEnv("CONNECTION_TIMEOUT")
 
+	viper.SetDefault("WORKER_SLEEP", 2)
+	viper.SetDefault("WORKER_POOL", 5)
+	viper.SetDefault("MAIL_PORT", 25)
+	viper.SetDefault("CONNECTION_RETRIES", 3)
+	viper.SetDefault("CONNECTION_TIMEOUT", 5)
+
+	missing_keys := make([]string, 0)
 	for _, key := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "MAIL_HOST", "MAIL_PORT", "ADMIN_EMAIL"} {
 		if !viper.IsSet(key) {
-			log.Fatal(fmt.Sprintf("Can't find necessary environment variable %s", key))
+			missing_keys = append(missing_keys, key)
 		}
 	}
+	if len(missing_keys) > 0 {
+		log.Fatal(fmt.Sprintf("Can't find necessary environment variable(s): %s", strings.Join(missing_keys, ", ")))
+	}
+
+	// TODO We need bounds on some of the above variables
 
 	return &WorkerConfig{
-		Host:         viper.GetString("db_host"),
-		Port:         viper.GetString("db_port"),
-		DatabaseName: viper.GetString("db_name"),
-		WorkerSleep:  viper.GetInt("worker_sleep"),
-		WorkerPool:   viper.GetInt("worker_pool"),
-		MailHost:     viper.GetString("mail_host"),
-		MailPort:     viper.GetString("mail_port"),
-		AdminEmail:   viper.GetString("admin_email"),
+		Host:              viper.GetString("db_host"),
+		Port:              viper.GetString("db_port"),
+		DatabaseName:      viper.GetString("db_name"),
+		WorkerSleep:       viper.GetInt("worker_sleep"),
+		WorkerPool:        viper.GetInt("worker_pool"),
+		MailHost:          viper.GetString("mail_host"),
+		MailPort:          viper.GetString("mail_port"),
+		AdminEmail:        viper.GetString("admin_email"),
+		ConnectionRetries: viper.GetInt("connection_retries"),
+		ConnectionTimeout: viper.GetInt("connection_timeout"),
 	}
 }
 

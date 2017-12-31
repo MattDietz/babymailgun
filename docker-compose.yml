@@ -21,6 +21,8 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
+    command: ["-invite-jim", "-jim-accept=1", "-jim-reject-recipient=0.1"]
+
   database:
     image: mongo:3.2
     ports:

@@ -22,15 +22,12 @@ func SendMail(cfg *MailConfig, email *Email) error {
 		sendTo = append(sendTo, recipient.Address)
 	}
 
-	log.Println(email.Body)
-
 	message, err := email.FormatMessage()
 	if err != nil {
 		return err
 	}
-
 	// TODO This never seems to time out, making it hard to kill the server
-	err := smtp.SendMail(hostPort, auth, cfg.AdminEmail, sendTo, message)
+	err = smtp.SendMail(hostPort, auth, email.MailFrom, sendTo, message)
 	if err != nil {
 		return err
 	}

@@ -151,5 +151,5 @@ def send_email():
     email_id = str(uuid.uuid4())
     db.emails.insert_one(to_email_model(email_id, data))
 
-    return "Email from '{}' with id {} queued for delivery".format(data["from"],
-                                                                   email_id)
+    return ("Email from '{}' to '{}' with id {} queued "
+            "for delivery".format(data["from"], data["to"], email_id))
