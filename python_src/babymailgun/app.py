@@ -87,7 +87,7 @@ def list_emails():
     for email in db.emails.find():
         app.logger.info(email)
         table.add_row([email["_id"], email["sender"], email["status"],
-                       email["status_reason"], email["created_at"],
+                       email["reason"], email["created_at"],
                        email["updated_at"], email["tries"]])
     return "{}\n".format(str(table))
 
@@ -106,7 +106,7 @@ def show_email(id):
     table.add_row(["Sender", email["sender"]])
     table.add_row(["Body", email["body"]])
     table.add_row(["Status", email["status"]])
-    table.add_row(["Reason", email["status_reason"]])
+    table.add_row(["Reason", email["reason"]])
     table.add_row(["Created", email["created_at"]])
     table.add_row(["Updated", email["updated_at"]])
     table.add_row(["Tries", email["tries"]])
@@ -120,14 +120,14 @@ def show_email_status(id):
     app.logger.debug("GET /emails/{}/status".format(id))
     client, db = _get_db_client()
     table = prettytable.PrettyTable()
-    table.field_names = ["Recipient", "Type", "Status", "Reason"]
+    table.field_names = ["Recipient", "Type", "Reason"]
     email = db.emails.find_one({"_id": id})
     if not email:
         return ("", 404)
 
     for recipient in email["recipients"]:
         table.add_row([recipient["address"], recipient["type"],
-                       recipient["status_code"], recipient["status_reason"]])
+                       recipient["reason"]])
     return "{}\n".format(str(table))
 
 

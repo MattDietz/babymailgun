@@ -14,6 +14,8 @@ type MailConfig struct {
 
 func SendMail(cfg *MailConfig, email *Email) error {
 	log.Println("Sending email...")
+
+	// TODO this should select a server from Mongo
 	auth := smtp.PlainAuth("", cfg.AdminEmail, "password", cfg.MailHost)
 
 	hostPort := fmt.Sprintf("%s:%s", cfg.MailHost, cfg.MailPort)

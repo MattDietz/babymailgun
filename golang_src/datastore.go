@@ -16,13 +16,6 @@ const (
 	RecipientBCC = "bcc"
 )
 
-type EmailRecipients struct {
-	Address      string
-	Status       int
-	StatusReason string
-	Type         string
-}
-
 type EmailStatus string
 type EmailReason string
 
@@ -37,6 +30,13 @@ const (
 	ReasonUnrecognizedCommand EmailReason = "Invalid authentication for the server, or server auth may be down"
 	ReasonEOF                 EmailReason = "The server disconnected while trying to transmit the email"
 )
+
+type EmailRecipients struct {
+	Address string
+	Status  int
+	Reason  string
+	Type    string
+}
 
 type Email struct {
 	ID         string `_id`

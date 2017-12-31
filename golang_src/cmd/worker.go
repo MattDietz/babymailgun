@@ -91,7 +91,7 @@ loop:
 					for _, rcpt := range emailUpdate.Recipients {
 						if rcpt.Address == failedEmail {
 							rcpt.Status = InvalidRecipientStatus
-							rcpt.StatusReason = InvalidRecipientError
+							rcpt.Reason = InvalidRecipientError
 						}
 					}
 					emailUpdate.Status = babymailgun.StatusFailed
@@ -121,6 +121,9 @@ loop:
 					}
 				}
 			} else {
+				for _, rcpt := range emailUpdate.Recipients {
+					rcpt.Reason = "ok"
+				}
 				emailUpdate.Status = babymailgun.StatusComplete
 			}
 

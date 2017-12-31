@@ -10,6 +10,43 @@ import requests
 def email_cli():
     pass
 
+@email_cli.command(help="Fetch emails")
+def get():
+    headers = {"Accept": "application/json"}
+    resp = requests.get("http://127.0.0.1:5000/emails", headers=headers)
+
+    if not resp.status_code == 200:
+        print("GET /emails failed")
+        print("Status code:", resp.status_code)
+    print(resp.text)
+
+
+@email_cli.command(help="Get details of a single email")
+@click.argument("email_id")
+def show(email_id):
+    headers = {"Accept": "application/json"}
+    resp = requests.get("http://127.0.0.1:5000/emails/{}".format(email_id),
+                        headers=headers)
+
+    if not resp.status_code == 200:
+        print("GET /emails/{} failed".format(email_id))
+        print("Status code:", resp.status_code)
+    print(resp.text)
+
+
+@email_cli.command(help="Show recipient status of a single email")
+@click.argument("email_id")
+def status(email_id):
+    headers = {"Accept": "application/json"}
+    resp = requests.get(
+        "http://127.0.0.1:5000/emails/{}/status".format(email_id),
+        headers=headers)
+
+    if not resp.status_code == 200:
+        print("GET /emails/{}/status failed".format(email_id))
+        print("Status code:", resp.status_code)
+    print(resp.text)
+
 
 @email_cli.command(help="Send an email")
 @click.argument("sender")
