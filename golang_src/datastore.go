@@ -59,13 +59,28 @@ type EmailUpdate struct {
 	Tries      int
 }
 
-type MongoClient struct {
+type MongoClientConfig struct {
 	Host              string
 	Port              string
 	DatabaseName      string
 	ConnectionRetries int
 	ConnectionTimeout int
-	session           *mgo.Session
+	SendRetries       int
+	SendRetryInterval int
+}
+
+type MongoClient struct {
+	Config  *MongoClientConfig
+	session *mgo.Session
+}
+
+func (e *EmailUpdate) FromEmail(email *Email) {
+	e.Tries = email.Tries
+	e.Status = email.Status
+	e.Reason = email.Reason
+	for _, rcpt := range email.Recipients {
+		e.Recipients = append(e.Recipients, rcpt)
+	}
 }
 
 func (e *Email) FormatMessage() ([]byte, error) {
@@ -97,8 +112,8 @@ func (e *Email) FormatMessage() ([]byte, error) {
 }
 
 func (m *MongoClient) dial() (*mgo.Session, error) {
-	hostPort := fmt.Sprintf("%s:%s", m.Host, m.Port)
-	timeout := time.Duration(m.ConnectionTimeout) * time.Second
+	hostPort := fmt.Sprintf("%s:%s", m.Config.Host, m.Config.Port)
+	timeout := time.Duration(m.Config.ConnectionTimeout) * time.Second
 	session, err := mgo.DialWithTimeout(hostPort, timeout)
 	if err != nil {
 		return nil, err
@@ -113,9 +128,9 @@ func (m *MongoClient) CleanUp() {
 func (m *MongoClient) getClient() (*mgo.Session, error) {
 	var connectionErr error
 
-	for i := 0; i < m.ConnectionRetries; i++ {
+	for i := 0; i < m.Config.ConnectionRetries; i++ {
 		if i > 0 {
-			fmt.Println(fmt.Sprintf("Failed to dial datastore, %d tries remaining", m.ConnectionRetries-i-1))
+			fmt.Println(fmt.Sprintf("Failed to dial datastore, %d tries remaining", m.Config.ConnectionRetries-i-1))
 		}
 		if m.session == nil {
 			if sess, err := m.dial(); err != nil {
@@ -123,8 +138,8 @@ func (m *MongoClient) getClient() (*mgo.Session, error) {
 				continue
 			} else {
 				m.session = sess
-				m.session.SetSocketTimeout(time.Duration(m.ConnectionTimeout) * time.Second)
-				m.session.SetSyncTimeout(time.Duration(m.ConnectionTimeout) * time.Second)
+				m.session.SetSocketTimeout(time.Duration(m.Config.ConnectionTimeout) * time.Second)
+				m.session.SetSyncTimeout(time.Duration(m.Config.ConnectionTimeout) * time.Second)
 			}
 		}
 		if m.session != nil {
@@ -150,13 +165,15 @@ func (m *MongoClient) FetchReadyEmail(workerId string) *Email {
 		return nil
 	}
 	session.SetMode(mgo.Strong, true)
-	emailCollection := session.DB(m.DatabaseName).C("emails")
+	emailCollection := session.DB(m.Config.DatabaseName).C("emails")
 	email := Email{}
 	change := mgo.Change{
 		Update:    bson.M{"$set": bson.M{"worker_id": workerId}},
 		ReturnNew: true}
 
-	info, err := emailCollection.Find(bson.M{"worker_id": nil, "status": "incomplete"}).Apply(change, &email)
+	// Fetch emails that are incomplete and N seconds old or older
+	olderThan := bson.M{"$lt": time.Now().Add(-time.Duration(m.Config.SendRetryInterval) * time.Second)}
+	info, err := emailCollection.Find(bson.M{"worker_id": nil, "status": "incomplete", "updated_at": olderThan}).Apply(change, &email)
 
 	if err != nil {
 		// Go back to sleep and hope mongo is ok?
@@ -179,7 +196,7 @@ func (m *MongoClient) UpdateEmail(email *Email, emailUpdate *EmailUpdate) error 
 	// TODO findAndModify only updates one document and single-document
 	//			updates are atomic, but is this safe enough? We're doing a
 	//			compare and swap of sorts (find with specific keys and replace)
-	emailCollection := session.DB(m.DatabaseName).C("emails")
+	emailCollection := session.DB(m.Config.DatabaseName).C("emails")
 	err = emailCollection.Update(
 		bson.M{"_id": email.ID},
 		// TODO This status has to be provided by the calling function
@@ -188,6 +205,7 @@ func (m *MongoClient) UpdateEmail(email *Email, emailUpdate *EmailUpdate) error 
 			"tries":      emailUpdate.Tries,
 			"status":     emailUpdate.Status,
 			"reason":     emailUpdate.Reason,
+			"updated_at": time.Now(),
 			"recipients": emailUpdate.Recipients}})
 
 	if err != nil {

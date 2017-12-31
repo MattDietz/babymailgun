@@ -25,8 +25,8 @@ type WorkerConfig struct {
 	AdminEmail        string
 	ConnectionTimeout int
 	ConnectionRetries int
-	EmailRetries      int
-	RetryInterval     int // in seconds
+	SendRetries       int
+	SendRetryInterval int // in seconds
 }
 
 const (
@@ -58,8 +58,11 @@ func processingLoop(cfg *WorkerConfig, wg *sync.WaitGroup, quit <-chan bool) {
 	workerId := uuid()
 	defer wg.Done()
 	mc := babymailgun.MailConfig{MailHost: cfg.MailHost, MailPort: cfg.MailPort, AdminEmail: cfg.AdminEmail}
-	mongoClient := babymailgun.MongoClient{Host: cfg.Host, Port: cfg.Port, DatabaseName: cfg.DatabaseName,
-		ConnectionTimeout: cfg.ConnectionTimeout, ConnectionRetries: cfg.ConnectionRetries}
+	clientConfig := babymailgun.MongoClientConfig{
+		Host: cfg.Host, Port: cfg.Port, DatabaseName: cfg.DatabaseName,
+		ConnectionTimeout: cfg.ConnectionTimeout, ConnectionRetries: cfg.ConnectionRetries,
+		SendRetries: cfg.SendRetries, SendRetryInterval: cfg.SendRetryInterval}
+	mongoClient := babymailgun.MongoClient{Config: &clientConfig}
 
 loop:
 	for {
@@ -75,8 +78,9 @@ loop:
 		if email != nil {
 			log.Printf("Got email %s Worker ID: %s\n", email.ID, workerId)
 
-			// Try to send the email
 			emailUpdate := babymailgun.EmailUpdate{}
+			emailUpdate.FromEmail(email)
+
 			if err := babymailgun.SendMail(&mc, email); err != nil {
 				fmt.Println("Email sending failed ", err)
 				errStr := err.Error()
@@ -84,12 +88,11 @@ loop:
 				if strings.HasPrefix(errStr, InvalidRecipientError) {
 					// This is a catastrophic failure. The server says our recipient doesn't exist
 					failedEmail := errStr[len(InvalidRecipientError)+1:]
-					for _, rcpt := range email.Recipients {
+					for _, rcpt := range emailUpdate.Recipients {
 						if rcpt.Address == failedEmail {
 							rcpt.Status = InvalidRecipientStatus
 							rcpt.StatusReason = InvalidRecipientError
 						}
-						emailUpdate.Recipients = append(emailUpdate.Recipients, rcpt)
 					}
 					emailUpdate.Status = babymailgun.StatusFailed
 					emailUpdate.Reason = babymailgun.ReasonInvalidRecipient
@@ -108,9 +111,12 @@ loop:
 					emailUpdate.Status = babymailgun.StatusIncomplete
 					emailUpdate.Reason = babymailgun.ReasonEOF
 				}
+
 				if emailUpdate.Status == babymailgun.StatusIncomplete {
 					emailUpdate.Tries = email.Tries + 1
-					if emailUpdate.Tries >= cfg.EmailRetries {
+					log.Printf("Email '%s' failed to send and has %d tries remaining. Reason: %s", email.ID, cfg.SendRetries-emailUpdate.Tries, emailUpdate.Reason)
+					if emailUpdate.Tries >= cfg.SendRetries {
+						log.Printf("Tries exhausted. Marking email '%s' as failed", email.ID)
 						emailUpdate.Status = babymailgun.StatusFailed
 					}
 				}
@@ -142,12 +148,16 @@ func loadConfig() *WorkerConfig {
 	viper.BindEnv("ADMIN_EMAIL")
 	viper.BindEnv("CONNECTION_RETRIES")
 	viper.BindEnv("CONNECTION_TIMEOUT")
+	viper.BindEnv("SEND_RETRIES")
+	viper.BindEnv("SEND_RETRY_INTERVAL")
 
 	viper.SetDefault("WORKER_SLEEP", 2)
 	viper.SetDefault("WORKER_POOL", 5)
 	viper.SetDefault("MAIL_PORT", 25)
 	viper.SetDefault("CONNECTION_RETRIES", 3)
 	viper.SetDefault("CONNECTION_TIMEOUT", 5)
+	viper.SetDefault("SEND_RETRIES", 3)
+	viper.SetDefault("SEND_RETRY_INTERVAL", 10) // in seconds
 
 	missing_keys := make([]string, 0)
 	for _, key := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "MAIL_HOST", "MAIL_PORT", "ADMIN_EMAIL"} {
@@ -172,6 +182,8 @@ func loadConfig() *WorkerConfig {
 		AdminEmail:        viper.GetString("admin_email"),
 		ConnectionRetries: viper.GetInt("connection_retries"),
 		ConnectionTimeout: viper.GetInt("connection_timeout"),
+		SendRetries:       viper.GetInt("send_retries"),
+		SendRetryInterval: viper.GetInt("send_retry_interval"),
 	}
 }
 
@@ -189,6 +201,10 @@ func main() {
 		go processingLoop(workerConfig, &wg, quitChannels[i])
 		wg.Add(1)
 	}
+
+	// NOTE If the datastore goes down long enough, some but not necessarily all goroutines may exit, resulting
+	//      in degraded performance. We'd want to trigger an alert when one exits, and probably
+	//			restart the entire process via signal, as it's the safest (non-racey) way to recover
 	select {
 	case <-sigs:
 		log.Printf("Received quit")

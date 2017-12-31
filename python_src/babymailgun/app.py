@@ -58,7 +58,7 @@ def to_email_model(email_id, email_dict):
             "sender": email_dict["from"],
             "recipients": recipients,
             "created_at": datetime.datetime.now(),
-            "updated_at": datetime.datetime.now(),
+            "updated_at": datetime.datetime.fromtimestamp(0),
             "status": "incomplete",
             "status_reason": "",
             "tries": 0,
