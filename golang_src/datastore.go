@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"log"
+	"math/rand"
 	"strings"
 	"time"
 )
@@ -74,6 +76,25 @@ type MongoClient struct {
 	session *mgo.Session
 }
 
+// NOTE In a real production environment we wouldn't store the credentials in mongo. Instead we'd use
+//			something like Hashicorp Vault and distribute x509 certs to all the production hosts we want
+//			to have access to any sensitive data. Also this would be an interface type to correspond
+//			to different auth mechanisms (No reason to assume SMTP Auth is the only auth we need to consider)
+//			Lastly, I'm choosing not to model failing servers out here. I think such logic is better served
+//			by a load balancer capable of dynamicaly adding and removing hosts from a pool (Such as HAProxy).
+type SMTPServer struct {
+	ID       string `_id`
+	Username string
+	Password string
+	Hostname string
+	Port     int
+}
+
+var (
+	NoServersFoundError   = errors.New("No SMTP servers are available to send emails")
+	InvalidRecipientError = errors.New("Malformatted email, recipient type is invalid")
+)
+
 func (e *EmailUpdate) FromEmail(email *Email) {
 	e.Tries = email.Tries
 	e.Status = email.Status
@@ -83,7 +104,40 @@ func (e *EmailUpdate) FromEmail(email *Email) {
 	}
 }
 
-func (e *Email) FormatMessage() ([]byte, error) {
+func (m *MongoClient) GetSMTPServer() (*SMTPServer, error) {
+	// NOTE In a production environment, we may want to restructure this to be a pipeline
+	//			of sorts, where emails are logically assigned to SMTP servers based on some
+	//			load semantics. Either load could be represented in the database, or distinct
+	//			sending-only workers could sit in front of a single SMTP server/relay, monitoring
+	//			load, and accepting messages from a queue. A leaky-bucket could simulate this
+	//			fairly well. https://en.wikipedia.org/wiki/Leaky_bucket However, this is fairly
+	//			complex to model and has lots of race-prone conditions to consider, and probably
+	//			warrants a project all it's own
+	session, err := m.getClient()
+	if err != nil {
+		return nil, err
+	}
+	session.SetMode(mgo.Strong, false)
+	smtpCollection := session.DB(m.Config.DatabaseName).C("servers")
+	query := bson.M{}
+	var smtpServers []SMTPServer
+
+	// Yes, this is naive. If we had a couple hundred thousand servers this would
+	// be a disaster. We'd likely want to replace this with round-robin selection
+	// at the very least, but optimally instead something like the NOTE above
+	err = smtpCollection.Find(query).All(&smtpServers)
+	if err != nil {
+		return nil, err
+	}
+	if len(smtpServers) == 0 {
+		return nil, NoServersFoundError
+	}
+	server := &smtpServers[rand.Intn(len(smtpServers))]
+	log.Printf("Found %d server(s), using %s:%d", len(smtpServers), server.Hostname, server.Port)
+	return server, nil
+}
+
+func (e *Email) FormattedMessage() ([]byte, error) {
 	var bodyBytes bytes.Buffer
 	bodyBytes.WriteString(fmt.Sprintf("From: %s\r\n", e.MailFrom))
 	var toRecipients, ccRecipients []string
@@ -96,7 +150,7 @@ func (e *Email) FormatMessage() ([]byte, error) {
 			ccRecipients = append(ccRecipients, recipient.Address)
 		case RecipientBCC:
 		default:
-			return nil, errors.New("Malformatted email, recipient type is invalid")
+			return nil, InvalidRecipientError
 		}
 	}
 	if len(toRecipients) > 0 {
@@ -122,7 +176,9 @@ func (m *MongoClient) dial() (*mgo.Session, error) {
 }
 
 func (m *MongoClient) CleanUp() {
-	m.session.Close()
+	if m.session != nil {
+		m.session.Close()
+	}
 }
 
 func (m *MongoClient) getClient() (*mgo.Session, error) {
@@ -130,7 +186,7 @@ func (m *MongoClient) getClient() (*mgo.Session, error) {
 
 	for i := 0; i < m.Config.ConnectionRetries; i++ {
 		if i > 0 {
-			fmt.Println(fmt.Sprintf("Failed to dial datastore, %d tries remaining", m.Config.ConnectionRetries-i-1))
+			log.Println(fmt.Sprintf("Failed to dial datastore with %d timeout, %d tries remaining", m.Config.ConnectionTimeout, m.Config.ConnectionRetries-i-1))
 		}
 		if m.session == nil {
 			if sess, err := m.dial(); err != nil {
@@ -155,14 +211,14 @@ func (m *MongoClient) getClient() (*mgo.Session, error) {
 	// Couldn't access the datastore, what do we do?
 	// In a production system, this would (at least) send alerts/page people, because this
 	// may be lost data. We'll settle for a retry with backoff here, and fall back
-	// to a panic. Not ideal, but we're basically dead if our datastore is dead.
-	panic(fmt.Sprintf("Failed to connect to the datastore. Error: %s", connectionErr.Error()))
+	// to an error.
+	return nil, errors.New(fmt.Sprintf("Failed to connect to the datastore. Error: %s", connectionErr.Error()))
 }
 
-func (m *MongoClient) FetchReadyEmail(workerId string) *Email {
+func (m *MongoClient) FetchReadyEmail(workerId string) (*Email, error) {
 	session, err := m.getClient()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	session.SetMode(mgo.Strong, true)
 	emailCollection := session.DB(m.Config.DatabaseName).C("emails")
@@ -173,18 +229,18 @@ func (m *MongoClient) FetchReadyEmail(workerId string) *Email {
 
 	// Fetch emails that are incomplete and N seconds old or older
 	olderThan := bson.M{"$lt": time.Now().Add(-time.Duration(m.Config.SendRetryInterval) * time.Second)}
-	info, err := emailCollection.Find(bson.M{"worker_id": nil, "status": "incomplete", "updated_at": olderThan}).Apply(change, &email)
+	_, err = emailCollection.Find(bson.M{"worker_id": nil, "status": "incomplete", "updated_at": olderThan}).Apply(change, &email)
 
 	if err != nil {
-		// Go back to sleep and hope mongo is ok?
-		return nil
+		// We might have lost contact with Mongo, or there are simply no emails to send right now
+		if err.Error() == "not found" {
+			log.Println("Nothing to send")
+			return nil, nil
+		}
+		return nil, err
 	}
 
-	if info.Matched == 0 {
-		return nil
-	}
-
-	return &email
+	return &email, nil
 }
 
 func (m *MongoClient) UpdateEmail(email *Email, emailUpdate *EmailUpdate) error {

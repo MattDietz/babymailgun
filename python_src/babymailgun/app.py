@@ -34,6 +34,7 @@ except ValueError:
     raise ConfigTypeError(key="DB_PORT", key_type="int")
 
 DB_NAME = get_env("DB_NAME")
+
 app = flask.Flask("mailgun")
 
 

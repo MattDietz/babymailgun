@@ -20,9 +20,6 @@ type WorkerConfig struct {
 	DatabaseName      string
 	WorkerSleep       int
 	WorkerPool        int
-	MailHost          string
-	MailPort          string
-	AdminEmail        string
 	ConnectionTimeout int
 	ConnectionRetries int
 	SendRetries       int
@@ -57,7 +54,7 @@ func processingLoop(cfg *WorkerConfig, wg *sync.WaitGroup, quit <-chan bool) {
 	log.Println("Starting processing loop...")
 	workerId := uuid()
 	defer wg.Done()
-	mc := babymailgun.MailConfig{MailHost: cfg.MailHost, MailPort: cfg.MailPort, AdminEmail: cfg.AdminEmail}
+
 	clientConfig := babymailgun.MongoClientConfig{
 		Host: cfg.Host, Port: cfg.Port, DatabaseName: cfg.DatabaseName,
 		ConnectionTimeout: cfg.ConnectionTimeout, ConnectionRetries: cfg.ConnectionRetries,
@@ -74,65 +71,82 @@ loop:
 		default:
 			log.Println("Looking for emails to send")
 		}
-		email := mongoClient.FetchReadyEmail(workerId)
-		if email != nil {
-			log.Printf("Got email %s Worker ID: %s\n", email.ID, workerId)
 
-			emailUpdate := babymailgun.EmailUpdate{}
-			emailUpdate.FromEmail(email)
+		var err error
+		var email *babymailgun.Email
+		var smtpServer *babymailgun.SMTPServer
 
-			if err := babymailgun.SendMail(&mc, email); err != nil {
-				fmt.Println("Email sending failed ", err)
-				errStr := err.Error()
+		// Get a server first. Don't lock up an email if we can't send it
+		smtpServer, err = mongoClient.GetSMTPServer()
+		if err == nil {
+			email, err = mongoClient.FetchReadyEmail(workerId)
+			if email != nil {
+				log.Printf("Got email %s Worker ID: %s\n", email.ID, workerId)
 
-				if strings.HasPrefix(errStr, InvalidRecipientError) {
-					// This is a catastrophic failure. The server says our recipient doesn't exist
-					failedEmail := errStr[len(InvalidRecipientError)+1:]
-					for _, rcpt := range emailUpdate.Recipients {
-						if rcpt.Address == failedEmail {
-							rcpt.Status = InvalidRecipientStatus
-							rcpt.Reason = InvalidRecipientError
+				emailUpdate := babymailgun.EmailUpdate{}
+				emailUpdate.FromEmail(email)
+
+				if err = babymailgun.SendMail(smtpServer, email); err != nil {
+					fmt.Println("Email sending failed ", err)
+					errStr := err.Error()
+
+					if strings.HasPrefix(errStr, InvalidRecipientError) {
+						// This is a catastrophic failure. The server says our recipient doesn't exist
+						failedEmail := errStr[len(InvalidRecipientError)+1:]
+						for _, rcpt := range emailUpdate.Recipients {
+							if rcpt.Address == failedEmail {
+								rcpt.Status = InvalidRecipientStatus
+								rcpt.Reason = InvalidRecipientError
+							}
+						}
+						emailUpdate.Status = babymailgun.StatusFailed
+						emailUpdate.Reason = babymailgun.ReasonInvalidRecipient
+					}
+
+					if strings.HasPrefix(errStr, UnrecognizedCommandError) {
+						// This is an auth failure. This may be catastrophic, but we'll retry since it could
+						// be a function of load. In other words, we don't know how it's actually handling auth
+						// on the server side, and the referring service could be down temporarily
+						emailUpdate.Status = babymailgun.StatusIncomplete
+						emailUpdate.Reason = babymailgun.ReasonUnrecognizedCommand
+					}
+
+					if strings.HasPrefix(errStr, EOFError) {
+						// this is potentially a temporary failure, and the message should be retried
+						emailUpdate.Status = babymailgun.StatusIncomplete
+						emailUpdate.Reason = babymailgun.ReasonEOF
+					}
+
+					if emailUpdate.Status == babymailgun.StatusIncomplete {
+						emailUpdate.Tries = email.Tries + 1
+						log.Printf("Email '%s' failed to send and has %d tries remaining. Reason: %s", email.ID, cfg.SendRetries-emailUpdate.Tries, emailUpdate.Reason)
+						if emailUpdate.Tries >= cfg.SendRetries {
+							log.Printf("Tries exhausted. Marking email '%s' as failed", email.ID)
+							emailUpdate.Status = babymailgun.StatusFailed
 						}
 					}
-					emailUpdate.Status = babymailgun.StatusFailed
-					emailUpdate.Reason = babymailgun.ReasonInvalidRecipient
-				}
-
-				if strings.HasPrefix(errStr, UnrecognizedCommandError) {
-					// This is an auth failure. This may be catastrophic, but we'll retry since it could
-					// be a function of load. In other words, we don't know how it's actually handling auth
-					// on the server side, and the referring service could be down temporarily
-					emailUpdate.Status = babymailgun.StatusIncomplete
-					emailUpdate.Reason = babymailgun.ReasonUnrecognizedCommand
-				}
-
-				if strings.HasPrefix(errStr, EOFError) {
-					// this is potentially a temporary failure, and the message should be retried
-					emailUpdate.Status = babymailgun.StatusIncomplete
-					emailUpdate.Reason = babymailgun.ReasonEOF
-				}
-
-				if emailUpdate.Status == babymailgun.StatusIncomplete {
-					emailUpdate.Tries = email.Tries + 1
-					log.Printf("Email '%s' failed to send and has %d tries remaining. Reason: %s", email.ID, cfg.SendRetries-emailUpdate.Tries, emailUpdate.Reason)
-					if emailUpdate.Tries >= cfg.SendRetries {
-						log.Printf("Tries exhausted. Marking email '%s' as failed", email.ID)
-						emailUpdate.Status = babymailgun.StatusFailed
+				} else {
+					for _, rcpt := range emailUpdate.Recipients {
+						rcpt.Reason = "ok"
 					}
+					emailUpdate.Status = babymailgun.StatusComplete
 				}
-			} else {
-				for _, rcpt := range emailUpdate.Recipients {
-					rcpt.Reason = "ok"
-				}
-				emailUpdate.Status = babymailgun.StatusComplete
-			}
 
-			// Process the email response to see if any recipients failed and create
-			// and update document. Additionally, "release" the email by setting the
-			// worker_id to nil
-			log.Printf("Updating and releasing email %s\n", email.ID)
-			mongoClient.UpdateEmail(email, &emailUpdate)
-		} else {
+				// Process the email response to see if any recipients failed and create
+				// and update document. Additionally, "release" the email by setting the
+				// worker_id to nil
+				log.Printf("Updating and releasing email %s\n", email.ID)
+				mongoClient.UpdateEmail(email, &emailUpdate)
+			}
+		}
+
+		if err != nil || smtpServer == nil || email == nil {
+			if err != nil {
+				// NOTE If the datastore goes down long enough, We'd want to trigger an alert at this point,
+				//			and probably have monitoring restart the entire process via signal, as it's the safest
+				//			(non-racey) way to recover
+				log.Printf("Caught Error: %s", err.Error())
+			}
 			log.Printf("Going back to sleep for %d seconds\n", cfg.WorkerSleep)
 			time.Sleep(time.Duration(cfg.WorkerSleep) * time.Second)
 		}
@@ -146,24 +160,20 @@ func loadConfig() *WorkerConfig {
 	viper.BindEnv("DB_NAME")
 	viper.BindEnv("WORKER_SLEEP")
 	viper.BindEnv("WORKER_POOL")
-	viper.BindEnv("MAIL_HOST")
-	viper.BindEnv("MAIL_PORT")
-	viper.BindEnv("ADMIN_EMAIL")
 	viper.BindEnv("CONNECTION_RETRIES")
 	viper.BindEnv("CONNECTION_TIMEOUT")
 	viper.BindEnv("SEND_RETRIES")
 	viper.BindEnv("SEND_RETRY_INTERVAL")
 
-	viper.SetDefault("WORKER_SLEEP", 2)
+	viper.SetDefault("WORKER_SLEEP", 10)
 	viper.SetDefault("WORKER_POOL", 5)
-	viper.SetDefault("MAIL_PORT", 25)
 	viper.SetDefault("CONNECTION_RETRIES", 3)
 	viper.SetDefault("CONNECTION_TIMEOUT", 5)
 	viper.SetDefault("SEND_RETRIES", 3)
-	viper.SetDefault("SEND_RETRY_INTERVAL", 10) // in seconds
+	viper.SetDefault("SEND_RETRY_INTERVAL", 600) // in seconds
 
 	missing_keys := make([]string, 0)
-	for _, key := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "MAIL_HOST", "MAIL_PORT", "ADMIN_EMAIL"} {
+	for _, key := range []string{"DB_HOST", "DB_PORT", "DB_NAME"} {
 		if !viper.IsSet(key) {
 			missing_keys = append(missing_keys, key)
 		}
@@ -180,9 +190,6 @@ func loadConfig() *WorkerConfig {
 		DatabaseName:      viper.GetString("db_name"),
 		WorkerSleep:       viper.GetInt("worker_sleep"),
 		WorkerPool:        viper.GetInt("worker_pool"),
-		MailHost:          viper.GetString("mail_host"),
-		MailPort:          viper.GetString("mail_port"),
-		AdminEmail:        viper.GetString("admin_email"),
 		ConnectionRetries: viper.GetInt("connection_retries"),
 		ConnectionTimeout: viper.GetInt("connection_timeout"),
 		SendRetries:       viper.GetInt("send_retries"),
@@ -197,17 +204,17 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	var wg sync.WaitGroup
+
+	// Workers signal on this when they quit to let the parent know they've exited
 	var quitChannels []chan bool
 	for i := 0; i < workerConfig.WorkerPool; i++ {
 		quit := make(chan bool, 1)
+		defer close(quit)
 		quitChannels = append(quitChannels, quit)
 		go processingLoop(workerConfig, &wg, quitChannels[i])
 		wg.Add(1)
 	}
 
-	// NOTE If the datastore goes down long enough, some but not necessarily all goroutines may exit, resulting
-	//      in degraded performance. We'd want to trigger an alert when one exits, and probably
-	//			restart the entire process via signal, as it's the safest (non-racey) way to recover
 	select {
 	case <-sigs:
 		log.Printf("Received quit")
@@ -215,6 +222,7 @@ func main() {
 			quitChannels[i] <- true
 		}
 	}
+	log.Println("Waiting for workers to exit...")
 	wg.Wait()
 	log.Println("Done")
 }

@@ -9,6 +9,8 @@ RUN export DOCKERIZE_VERSION=v0.3.0 && wget https://github.com/jwilder/dockerize
         && rm dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz
 
 ADD ./requirements.txt /code
+ADD ./docker/api_entrypoint.sh /code/api_entrypoint.sh
+ADD ./docker/add_server.py /code/add_server.py
 ADD ./MANIFEST.in /code
 ADD ./setup.py /code
 ADD ./babymailgun /code/babymailgun

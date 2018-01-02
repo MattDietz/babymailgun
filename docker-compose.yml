@@ -15,7 +15,7 @@ services:
       - ./python_src/babymailgun:/code/babymailgun
     depends_on:
      - database
-    command: dockerize -timeout 60s -wait tcp://database:27017 flask run -h 0.0.0.0 -p5000 --reload
+    command: ./api_entrypoint.sh
   mailhog:
     image: mailhog/mailhog
     ports:

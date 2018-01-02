@@ -6,29 +6,21 @@ import (
 	"net/smtp"
 )
 
-type MailConfig struct {
-	MailHost   string
-	MailPort   string
-	AdminEmail string
-}
-
-func SendMail(cfg *MailConfig, email *Email) error {
+func SendMail(smtpServer *SMTPServer, email *Email) error {
 	log.Println("Sending email...")
 
-	// TODO this should select a server from Mongo
-	auth := smtp.PlainAuth("", cfg.AdminEmail, "password", cfg.MailHost)
+	auth := smtp.PlainAuth("", smtpServer.Username, smtpServer.Password, smtpServer.Hostname)
 
-	hostPort := fmt.Sprintf("%s:%s", cfg.MailHost, cfg.MailPort)
+	hostPort := fmt.Sprintf("%s:%d", smtpServer.Hostname, smtpServer.Port)
 	var sendTo []string
 	for _, recipient := range email.Recipients {
 		sendTo = append(sendTo, recipient.Address)
 	}
 
-	message, err := email.FormatMessage()
+	message, err := email.FormattedMessage()
 	if err != nil {
 		return err
 	}
-	// TODO This never seems to time out, making it hard to kill the server
 	err = smtp.SendMail(hostPort, auth, email.MailFrom, sendTo, message)
 	if err != nil {
 		return err
