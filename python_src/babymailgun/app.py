@@ -3,7 +3,6 @@ import os
 import uuid
 
 import flask
-import prettytable
 import pymongo
 
 
@@ -27,15 +26,18 @@ def get_env(key):
     return os.environ[key]
 
 
-DB_HOST = get_env("DB_HOST")
-try:
-    DB_PORT = int(get_env("DB_PORT"))
-except ValueError:
-    raise ConfigTypeError(key="DB_PORT", key_type="int")
+app = flask.Flask(__name__)
 
-DB_NAME = get_env("DB_NAME")
 
-app = flask.Flask("mailgun")
+@app.before_first_request
+def setup_app():
+    app.config["DB_HOST"] = get_env("DB_HOST")
+    try:
+        app.config["DB_PORT"] = int(get_env("DB_PORT"))
+    except ValueError:
+        raise ConfigTypeError(key="DB_PORT", key_type="int")
+
+    app.config["DB_NAME"] = get_env("DB_NAME")
 
 
 def to_email_model(email_id, email_dict):
@@ -44,8 +46,8 @@ def to_email_model(email_id, email_dict):
     def to_recipients(recipients, recipient_type):
         return [{"address": a,
                  "type": recipient_type,
-                 "status_code": 0,
-                 "status_reason": ""} for a in recipients]
+                 "status": 0,
+                 "reason": ""} for a in recipients]
 
     for receiver_type in ["to", "cc", "bcc"]:
         recipients.extend(to_recipients(email_dict[receiver_type],
@@ -60,19 +62,14 @@ def to_email_model(email_id, email_dict):
             "created_at": datetime.datetime.now(),
             "updated_at": datetime.datetime.fromtimestamp(0),
             "status": "incomplete",
-            "status_reason": "",
+            "reason": "",
             "tries": 0,
             "worker_id": None}
 
 
-@app.route("/")
-def index():
-    return ""
-
-
 def _get_db_client():
-    client = pymongo.MongoClient(DB_HOST, DB_PORT)
-    db = client[DB_NAME]
+    client = pymongo.MongoClient(app.config["DB_HOST"], app.config["DB_PORT"])
+    db = client[app.config["DB_NAME"]]
     return db
 
 
@@ -80,72 +77,54 @@ def _get_db_client():
 def list_emails():
     app.logger.debug("GET /emails")
     db = _get_db_client()
-    table = prettytable.PrettyTable()
-    table.field_names = ["Id", "Sender", "Status", "Reason",
-                         "Created", "Updated", "Sending Attempts"]
+    emails = []
     for email in db.emails.find():
-        table.add_row([email["_id"], email["sender"], email["status"],
-                       email["reason"], email["created_at"],
-                       email["updated_at"], email["tries"]])
-    return "{}\n".format(str(table))
+        emails.append({
+            "id": email["_id"],
+            "sender": email["sender"],
+            "status": email["status"],
+            "reason": email["reason"],
+            "created_at": email["created_at"],
+            "updated_at": email["updated_at"],
+            "tries": email["tries"]})
+    return flask.jsonify(emails)
 
 
 @app.route("/emails/<email_id>", methods=["GET"])
 def show_email(email_id):
     app.logger.debug("GET /emails/%s", email_id)
     db = _get_db_client()
-    table = prettytable.PrettyTable()
-    table.field_names = ["Field", "Entry"]
     email = db.emails.find_one({"_id": email_id})
     if not email:
         return ("", 404)
 
-    table.add_row(["Id", email["_id"]])
-    table.add_row(["Sender", email["sender"]])
-    # We deliberately truncate the body here
-    if len(email["body"]) > 120:
-        email["body"] = email["body"][:80]
-
-    table.add_row(["Body", email["body"]])
-    table.add_row(["Status", email["status"]])
-    table.add_row(["Reason", email["reason"]])
-    table.add_row(["Created", email["created_at"]])
-    table.add_row(["Updated", email["updated_at"]])
-    table.add_row(["Tries", email["tries"]])
-    return "{}\n".format(str(table))
+    email = {"id": email["_id"],
+             "sender": email["sender"],
+             "status": email["status"],
+             "reason": email["reason"],
+             "body": email["body"],
+             "created_at": email["created_at"],
+             "updated_at": email["updated_at"],
+             "tries": email["tries"]}
+    return flask.jsonify(email)
 
 
-@app.route("/emails/<email_id>/body", methods=["GET"])
-def get_email_body(email_id):
-    app.logger.debug("GET /emails/%s", email_id)
-    db = _get_db_client()
-    table = prettytable.PrettyTable()
-    table.field_names = ["Field", "Entry"]
-    email = db.emails.find_one({"_id": email_id})
-    if not email:
-        return ("", 404)
-
-    table.add_row(["Id", email["_id"]])
-    table.add_row(["Body", email["body"]])
-    return "{}\n".format(str(table))
-
-
-@app.route("/emails/<email_id>/status", methods=["GET"])
-def show_email_status(email_id):
+@app.route("/emails/<email_id>/recipients", methods=["GET"])
+def show_email_recipients(email_id):
     # NOTE(mdietz): In the real world we'd stick a cache+rate limiting of some
     #               kind here as users would hammer this endpoint
-    app.logger.debug("GET /emails/%s/status", email_id)
+    app.logger.debug("GET /emails/%s/recipients", email_id)
     db = _get_db_client()
-    table = prettytable.PrettyTable()
-    table.field_names = ["Recipient", "Type", "Reason"]
     email = db.emails.find_one({"_id": email_id})
     if not email:
         return ("", 404)
 
+    recipients = []
     for recipient in email["recipients"]:
-        table.add_row([recipient["address"], recipient["type"],
-                       recipient["reason"]])
-    return "{}\n".format(str(table))
+        recipients.append({"address": recipient["address"],
+                           "type": recipient["type"],
+                           "reason": recipient["reason"]})
+    return flask.jsonify(recipients)
 
 
 @app.route("/emails", methods=["POST"])
@@ -161,7 +140,9 @@ def send_email():
 
     db = _get_db_client()
     email_id = str(uuid.uuid4())
-    db.emails.insert_one(to_email_model(email_id, data))
+    email = to_email_model(email_id, data)
+    db.emails.insert_one(email)
+    email.pop("_id")
+    email["id"] = email_id
 
-    return ("Email from '{}' to '{}' with id {} queued "
-            "for delivery".format(data["from"], data["to"], email_id))
+    return flask.jsonify(email)

@@ -3,6 +3,7 @@ import os
 import sys
 
 import click
+import prettytable
 import requests
 
 
@@ -16,67 +17,89 @@ def get():
     try:
         resp = requests.get("http://127.0.0.1:5000/emails", headers=headers)
     except requests.exceptions.ConnectionError:
-        print("Failed to fetch emails. Server refused tbe connection")
+        click.echo("Failed to fetch emails. Server refused tbe connection")
         return
 
     if not resp.status_code == 200:
-        print("GET /emails failed")
-        print("Status code:", resp.status_code)
-    print(resp.text)
+        click.echo("GET /emails failed")
+        click.echo("Status code:", resp.status_code)
+        click.echo(resp.text)
+        return
+
+    table = prettytable.PrettyTable()
+    table.field_names = ["Id", "Sender", "Status", "Reason",
+                         "Created", "Updated", "Sending Attempts"]
+    emails = resp.json()
+    for email in emails:
+        table.add_row([email["id"], email["sender"], email["status"],
+                       email["reason"], email["created_at"],
+                       email["updated_at"], email["tries"]])
+    click.echo(str(table))
 
 
 @email_cli.command(help="Get details of a single email")
 @click.argument("email_id")
-def show(email_id):
+@click.option("-s", "--show-body", is_flag=True, default=False,
+              help="Display the entire body, regardless of length")
+def show(email_id, show_body):
     headers = {"Accept": "application/json"}
     try:
         resp = requests.get("http://127.0.0.1:5000/emails/{}".format(email_id),
                             headers=headers)
     except requests.exceptions.ConnectionError:
-        print("Failed to fetch emails. Server refused tbe connection")
+        click.echo("Failed to fetch emails. Server refused tbe connection")
         return
 
     if not resp.status_code == 200:
-        print("GET /emails/{} failed".format(email_id))
-        print("Status code:", resp.status_code)
-    print(resp.text)
-
-
-@email_cli.command(help="Fetch and display the body of a single email."
-                        "Useful when the body is especially long")
-@click.argument("email_id")
-def get_body(email_id):
-    headers = {"Accept": "application/json"}
-    try:
-        resp = requests.get(
-            "http://127.0.0.1:5000/emails/{}/body".format(email_id),
-            headers=headers)
-    except requests.exceptions.ConnectionError:
-        print("Failed to fetch emails. Server refused tbe connection")
+        click.echo("GET /emails/{} failed".format(email_id))
+        click.echo("Status code:", resp.status_code)
+        click.echo(resp.text)
         return
 
-    if not resp.status_code == 200:
-        print("GET /emails/{}/body failed".format(email_id))
-        print("Status code:", resp.status_code)
-    print(resp.text)
+    email = resp.json()
+    table = prettytable.PrettyTable()
+    table.field_names = ["Field", "Entry"]
+    table.add_row(["ID", email["id"]])
+    table.add_row(["Sender", email["sender"]])
+    # We deliberately truncate the body here
+    max_length = 120
+    if not show_body and len(email["body"]) > max_length:
+        email["body"] = email["body"][:max_length]
+
+    table.add_row(["Body", email["body"]])
+    table.add_row(["Status", email["status"]])
+    table.add_row(["Reason", email["reason"]])
+    table.add_row(["Created", email["created_at"]])
+    table.add_row(["Updated", email["updated_at"]])
+    table.add_row(["Tries", email["tries"]])
+    click.echo(str(table))
 
 
 @email_cli.command(help="Show recipient status of a single email")
 @click.argument("email_id")
-def status(email_id):
+def get_recipients(email_id):
     headers = {"Accept": "application/json"}
     try:
         resp = requests.get(
-            "http://127.0.0.1:5000/emails/{}/status".format(email_id),
+            "http://127.0.0.1:5000/emails/{}/recipients".format(email_id),
             headers=headers)
     except requests.exceptions.ConnectionError:
-        print("Failed to fetch emails. Server refused tbe connection")
+        click.echo("Failed to fetch emails. Server refused tbe connection")
         return
 
     if not resp.status_code == 200:
-        print("GET /emails/{}/status failed".format(email_id))
-        print("Status code:", resp.status_code)
-    print(resp.text)
+        click.echo("GET /emails/{}/recipients failed".format(email_id))
+        click.echo("Status code:", resp.status_code)
+        click.echo(resp.text)
+        return
+
+    recipients = resp.json()
+    table = prettytable.PrettyTable()
+    table.field_names = ["Recipient", "Type", "Reason"]
+    for recipient in recipients:
+        table.add_row([recipient["address"], recipient["type"],
+                       recipient["reason"]])
+    click.echo(str(table))
 
 
 @email_cli.command(help="Send an email")
@@ -109,13 +132,18 @@ def send(sender, to, cc, bcc, subject, body):
         resp = requests.post("http://127.0.0.1:5000/emails", headers=headers,
                              data=data)
     except requests.exceptions.ConnectionError:
-        print("Failed to fetch emails. Server refused tbe connection")
+        click.echo("Failed to fetch emails. Server refused tbe connection")
         return
 
     if not resp.status_code == 200:
-        print("POST /emails failed")
-        print("Status code:", resp.status_code)
-    print(resp.text)
+        click.echo("POST /emails failed")
+        click.echo("Status code:", resp.status_code)
+        click.echo(resp.text)
+    email = resp.json()
+    click.echo("Email from '{}' to '{}' with id {} queued "
+               "for delivery".format(email["sender"],
+                                     ", ".join([e["address"] for e in email["recipients"]]),
+                                     email["id"]))
 
 
 def main():

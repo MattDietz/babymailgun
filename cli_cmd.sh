@@ -1,1 +1,0 @@
-python email_cli.py send admin@mailgun.com --body ../body.txt -t a@mailgun.com -t b@mailgun.com -t c@mailgun.com -t d@mailgun.com -t e@mailgun.com -t f@mailgun.com -c cc@mailgun.com --bcc bcc@mailgun.com -s "Email subject"
