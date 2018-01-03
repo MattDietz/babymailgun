@@ -35,5 +35,6 @@ distutils.core.setup(
     install_requires=requires("requirements.txt"),
     entry_points={
         "console_scripts": [
+            "mailgun_cli = babymailgun.shell:main",
         ]}
     )

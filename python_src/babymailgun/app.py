@@ -51,8 +51,7 @@ def to_email_model(email_id, email_dict):
         recipients.extend(to_recipients(email_dict[receiver_type],
                                         receiver_type))
 
-    return {
-            "_id": email_id,
+    return {"_id": email_id,
             "headers": [],
             "subject": email_dict["subject"],
             "body": email_dict["body"],
@@ -63,8 +62,7 @@ def to_email_model(email_id, email_dict):
             "status": "incomplete",
             "status_reason": "",
             "tries": 0,
-            "worker_id": None
-            }
+            "worker_id": None}
 
 
 @app.route("/")
@@ -75,36 +73,39 @@ def index():
 def _get_db_client():
     client = pymongo.MongoClient(DB_HOST, DB_PORT)
     db = client[DB_NAME]
-    return client, db
+    return db
 
 
 @app.route("/emails", methods=["GET"])
 def list_emails():
     app.logger.debug("GET /emails")
-    client, db = _get_db_client()
+    db = _get_db_client()
     table = prettytable.PrettyTable()
     table.field_names = ["Id", "Sender", "Status", "Reason",
                          "Created", "Updated", "Sending Attempts"]
     for email in db.emails.find():
-        app.logger.info(email)
         table.add_row([email["_id"], email["sender"], email["status"],
                        email["reason"], email["created_at"],
                        email["updated_at"], email["tries"]])
     return "{}\n".format(str(table))
 
 
-@app.route("/emails/<id>", methods=["GET"])
-def show_email(id):
-    app.logger.debug("GET /emails/{}".format(id))
-    client, db = _get_db_client()
+@app.route("/emails/<email_id>", methods=["GET"])
+def show_email(email_id):
+    app.logger.debug("GET /emails/%s", email_id)
+    db = _get_db_client()
     table = prettytable.PrettyTable()
     table.field_names = ["Field", "Entry"]
-    email = db.emails.find_one({"_id": id})
+    email = db.emails.find_one({"_id": email_id})
     if not email:
         return ("", 404)
 
     table.add_row(["Id", email["_id"]])
     table.add_row(["Sender", email["sender"]])
+    # We deliberately truncate the body here
+    if len(email["body"]) > 120:
+        email["body"] = email["body"][:80]
+
     table.add_row(["Body", email["body"]])
     table.add_row(["Status", email["status"]])
     table.add_row(["Reason", email["reason"]])
@@ -114,15 +115,30 @@ def show_email(id):
     return "{}\n".format(str(table))
 
 
-@app.route("/emails/<id>/status", methods=["GET"])
-def show_email_status(id):
+@app.route("/emails/<email_id>/body", methods=["GET"])
+def get_email_body(email_id):
+    app.logger.debug("GET /emails/%s", email_id)
+    db = _get_db_client()
+    table = prettytable.PrettyTable()
+    table.field_names = ["Field", "Entry"]
+    email = db.emails.find_one({"_id": email_id})
+    if not email:
+        return ("", 404)
+
+    table.add_row(["Id", email["_id"]])
+    table.add_row(["Body", email["body"]])
+    return "{}\n".format(str(table))
+
+
+@app.route("/emails/<email_id>/status", methods=["GET"])
+def show_email_status(email_id):
     # NOTE(mdietz): In the real world we'd stick a cache+rate limiting of some
     #               kind here as users would hammer this endpoint
-    app.logger.debug("GET /emails/{}/status".format(id))
-    client, db = _get_db_client()
+    app.logger.debug("GET /emails/%s/status", email_id)
+    db = _get_db_client()
     table = prettytable.PrettyTable()
     table.field_names = ["Recipient", "Type", "Reason"]
-    email = db.emails.find_one({"_id": id})
+    email = db.emails.find_one({"_id": email_id})
     if not email:
         return ("", 404)
 
@@ -135,20 +151,15 @@ def show_email_status(id):
 @app.route("/emails", methods=["POST"])
 def send_email():
     app.logger.debug("POST /emails")
-    # TODO This should generate an MD5/SHA and store that in the db, compare to
-    #      others and return a 409 or 422 , "You've already queued this email"
     headers = flask.request.headers
-    if "content-type" not in headers or ("content-type" in headers and
-            headers["content-type"].lower() != "application/json"):
+    if ("content-type" not in headers or
+            ("content-type" in headers and
+             headers["content-type"].lower() != "application/json")):
         return ("Invalid content-type or no content-type specified", 415)
 
     data = flask.request.get_json()
 
-    app.logger.debug("Sender: {}".format(data.get("from")))
-    app.logger.debug("Recipients: {}".format(data.get("to")))
-    app.logger.debug("Subject: {}".format(data.get("subject")))
-
-    client, db = _get_db_client()
+    db = _get_db_client()
     email_id = str(uuid.uuid4())
     db.emails.insert_one(to_email_model(email_id, data))
 

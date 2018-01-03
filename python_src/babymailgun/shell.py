@@ -13,7 +13,11 @@ def email_cli():
 @email_cli.command(help="Fetch emails")
 def get():
     headers = {"Accept": "application/json"}
-    resp = requests.get("http://127.0.0.1:5000/emails", headers=headers)
+    try:
+        resp = requests.get("http://127.0.0.1:5000/emails", headers=headers)
+    except requests.exceptions.ConnectionError:
+        print("Failed to fetch emails. Server refused tbe connection")
+        return
 
     if not resp.status_code == 200:
         print("GET /emails failed")
@@ -25,11 +29,34 @@ def get():
 @click.argument("email_id")
 def show(email_id):
     headers = {"Accept": "application/json"}
-    resp = requests.get("http://127.0.0.1:5000/emails/{}".format(email_id),
-                        headers=headers)
+    try:
+        resp = requests.get("http://127.0.0.1:5000/emails/{}".format(email_id),
+                            headers=headers)
+    except requests.exceptions.ConnectionError:
+        print("Failed to fetch emails. Server refused tbe connection")
+        return
 
     if not resp.status_code == 200:
         print("GET /emails/{} failed".format(email_id))
+        print("Status code:", resp.status_code)
+    print(resp.text)
+
+
+@email_cli.command(help="Fetch and display the body of a single email."
+                        "Useful when the body is especially long")
+@click.argument("email_id")
+def get_body(email_id):
+    headers = {"Accept": "application/json"}
+    try:
+        resp = requests.get(
+            "http://127.0.0.1:5000/emails/{}/body".format(email_id),
+            headers=headers)
+    except requests.exceptions.ConnectionError:
+        print("Failed to fetch emails. Server refused tbe connection")
+        return
+
+    if not resp.status_code == 200:
+        print("GET /emails/{}/body failed".format(email_id))
         print("Status code:", resp.status_code)
     print(resp.text)
 
@@ -38,9 +65,13 @@ def show(email_id):
 @click.argument("email_id")
 def status(email_id):
     headers = {"Accept": "application/json"}
-    resp = requests.get(
-        "http://127.0.0.1:5000/emails/{}/status".format(email_id),
-        headers=headers)
+    try:
+        resp = requests.get(
+            "http://127.0.0.1:5000/emails/{}/status".format(email_id),
+            headers=headers)
+    except requests.exceptions.ConnectionError:
+        print("Failed to fetch emails. Server refused tbe connection")
+        return
 
     if not resp.status_code == 200:
         print("GET /emails/{}/status failed".format(email_id))
@@ -74,8 +105,12 @@ def send(sender, to, cc, bcc, subject, body):
                        "to": to, "cc": cc, "bcc": bcc, "body": email_body})
     headers = {"Content-Type": "application/json",
                "Accept": "application/json"}
-    resp = requests.post("http://127.0.0.1:5000/emails", headers=headers,
-                         data=data)
+    try:
+        resp = requests.post("http://127.0.0.1:5000/emails", headers=headers,
+                             data=data)
+    except requests.exceptions.ConnectionError:
+        print("Failed to fetch emails. Server refused tbe connection")
+        return
 
     if not resp.status_code == 200:
         print("POST /emails failed")
