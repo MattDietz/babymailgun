@@ -67,6 +67,19 @@ def show(email_id, show_body):
     click.echo(str(table))
 
 
+@email_cli.command(help="Delete an email. This won't magically unsend "
+                        "an email ;-)")
+@click.argument("email_id")
+def delete(email_id):
+    try:
+        api_client = get_client()
+        api_client.delete_email(email_id)
+    except Exception as e:
+        click.echo("Deleting email {} failed with:".format(email_id))
+        sys.exit(e)
+    click.echo("Successfully deleted email with ID '{}'".format(email_id))
+
+
 @email_cli.command(help="Show recipient status of a single email")
 @click.argument("email_id")
 def get_recipients(email_id):

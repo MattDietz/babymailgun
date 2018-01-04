@@ -146,3 +146,14 @@ def send_email():
     email["id"] = email_id
 
     return flask.jsonify(email)
+
+
+@app.route("/emails/<email_id>", methods=["DELETE"])
+def delete_email(email_id):
+    app.logger.debug("DELETE /emails/%s", email_id)
+    db = _get_db_client()
+    delete_result = db.emails.delete_one({"_id": email_id})
+    if delete_result.deleted_count == 0:
+        return ("", 404)
+
+    return ("", 204)

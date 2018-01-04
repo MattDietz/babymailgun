@@ -182,15 +182,15 @@ Running Python Tests
     make python_tests
 
 
-================
-Running Go Tests
-================
+========================
+Running Functional Tests
+========================
 
 From your clone root:
 
 .. code-block:: bash
 
-    make go_tests
+    make functional_tests
 
 ===========================
 Manually Testing The Worker
@@ -220,7 +220,6 @@ Additionally, the project relies on the following technologies and tools:
 - Tox
 - Pyenv (optional)
 
-
 API
 ===
 
@@ -235,3 +234,14 @@ Worker
 ======
 
 The worker does all the heavy lifting of sending emails asynchronously, and is written against Go 1.8. It leverages goroutines to increase email throughput and interacts with MongoDB using Mongo's consistency and locking semantics, ensuring emails are only ever seen (and thus sent) by one goroutine at a time.
+
+=====================
+My Testing Philosophy
+=====================
+
+While I think there's a place for unit tests, there wasn't a lot of room for them to prove anything in this project. Put differently. unit tests are great for proving that elaborate logic is correct. What it's not great at is fetching values from the database or telling a server to manipulate
+bits over the wire. In those scenarios (at least if you're truly writing unit tests) you're left asserting that your mocking skills are up to task and that some third party library actually does what it says.
+
+With that said, I unit tested as much of the Python code as made sense to me. That includes some of the helper functions in the API code and error handling logic in the API client.
+
+Beyond that, I've opted to provide a functional testing suite instead that makes calls to a live API and actually interacts with MongoDB and asserts that those requests and responses make sense.

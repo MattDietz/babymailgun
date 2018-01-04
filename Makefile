@@ -33,11 +33,11 @@ logs : ## Helper for connecting to the docker-compose log output
 python_tests : ## Helper for running the python tests
 	@cd python_src && tox
  
-go_tests : ## Helper for running the go tests
-	@cd golang_src
+functional_tests : ## Helper for running the functional test suite
+	@cd python_src && tox -e functional
 
 shell : ## Runs the API container as an interactive shell for access to the CLI
 	@echo "Simply run 'mailgun_cli' to see the list of available commands, or 'tox' to run tests"
 	@docker-compose exec mailgun_api sh
 
-.PHONY : logs install_python reset_web clean_db stop run help python_tests go_tests shell
+.PHONY : logs install_python reset_web clean_db stop run help python_tests functional_tests shell

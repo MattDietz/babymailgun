@@ -212,3 +212,48 @@ class TestCreateEmail(tests.TestBase):
         with mock.patch("requests.post", mock_get):
             with pytest.raises(client.CreateFailure):
                 api_client.create_email(**self.create_signature())
+
+
+class TestDeleteEmail(tests.TestBase):
+    @pytest.fixture()
+    def api_client(self):
+        return client.MailgunAPIClient("1.2.3.4", "1234")
+
+    @pytest.fixture(scope="module")
+    def email_id(self):
+        return str(uuid.uuid4())
+
+    def _mock(self, status_code):
+        mock_response = mock.MagicMock()
+        mock_response.status_code = status_code
+        def mock_delete(*_args, **_kwargs):
+            return mock_response
+
+        return mock_delete
+
+    def test_delete_email(self, email_id, api_client):
+        mock_get = self._mock(204)
+
+        with self.not_raises():
+            with mock.patch("requests.delete", mock_get):
+                api_client.delete_email(email_id)
+
+    def test_get_email_by_id_connection_error(self, email_id, api_client):
+        with mock.patch("requests.delete") as mock_get:
+            mock_get.side_effect = requests.exceptions.ConnectionError
+            with pytest.raises(client.ConnectionRefused):
+                api_client.delete_email(email_id)
+
+    def test_get_email_by_id_not_found(self, email_id, api_client):
+        mock_get = self._mock(404)
+
+        with mock.patch("requests.delete", mock_get):
+            with pytest.raises(client.NotFound):
+                api_client.delete_email(email_id)
+
+    def test_get_email_by_id_other_failure(self, email_id, api_client):
+        mock_get = self._mock(500)
+
+        with mock.patch("requests.delete", mock_get):
+            with pytest.raises(client.DeleteFailure):
+                api_client.delete_email(email_id)

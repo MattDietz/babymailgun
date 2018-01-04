@@ -20,6 +20,10 @@ class GetFailure(ClientError):
     message = "Fetching %(resource)s failed with HTTP %(code)s: %(reason)s"
 
 
+class DeleteFailure(ClientError):
+    message = "Fetching %(resource)s failed with HTTP %(code)s: %(reason)s"
+
+
 class CreateFailure(ClientError):
     message = "Creating %(resource)s failed with HTTP %(code)s: %(reason)s"
 
@@ -100,3 +104,20 @@ class MailgunAPIClient(object):
                                 code=resp.status_code,
                                 reason=resp.text)
         return resp.json()
+
+    def delete_email(self, email_id):
+        headers = {"Accept": "application/json"}
+        try:
+            resp = requests.delete(
+                self.to_url("emails/{}".format(email_id)),
+                headers=headers)
+        except requests.exceptions.ConnectionError:
+            raise ConnectionRefused(host=self._host, port=self._port)
+
+        if resp.status_code == 404:
+            raise NotFound(resource="/emails/{}".format(email_id))
+
+        if resp.status_code != 204:
+            raise DeleteFailure(resource="/emails/{}".format(email_id),
+                                code=resp.status_code,
+                                reason=resp.text)
