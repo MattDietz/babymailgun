@@ -29,8 +29,17 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
-    command: ["-invite-jim", "-jim-accept=1", "-jim-reject-recipient=0.0", "-jim-disconnect=0.1"]
   database:
     image: mongo:3.2
     ports:
       - "27017:27017"
+  # NOTE Don't enable both Mailhog and Failhog at the same time. They both attach to the same port.
+  # To try out some of the robustness features of the project, comment out Mailhog, uncomment
+  # Failhog below, and try changing some of the values in the "command:" section
+  # See also: https://github.com/mailhog/MailHog/blob/master/docs/JIM.md
+  #failhog:
+  #  image: mailhog/mailhog
+  #  ports:
+  #    - "1025:1025"
+  #    - "8025:8025"
+  #  command: ["-invite-jim", "-jim-accept=1", "-jim-reject-recipient=0.0", "-jim-disconnect=0.1"]

@@ -22,7 +22,7 @@ ADD ./setup.py /code
 ADD ./babymailgun /code/babymailgun
 
 # These pycache dirs cause havoc with running stuff in the container
-RUN find . -name "*pycache*" -exec rm -rf {} \;
+RUN find . -name "*pycache*" -exec rm -rf {} \; ;true
 
 RUN pip install -r requirements.txt
 RUN pip install -r test-requirements.txt

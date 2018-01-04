@@ -1,35 +1,35 @@
-import json
 import os
 import sys
 
 import click
 import prettytable
-import requests
+
+from babymailgun import client
 
 
 @click.group()
 def email_cli():
     pass
 
+
+def get_client():
+    host = os.environ.get("API_HOST", "127.0.0.1")
+    port = os.environ.get("API_PORT", "5000")
+    return client.MailgunAPIClient(host, port)
+
+
 @email_cli.command(help="Fetch emails")
 def get():
-    headers = {"Accept": "application/json"}
     try:
-        resp = requests.get("http://127.0.0.1:5000/emails", headers=headers)
-    except requests.exceptions.ConnectionError:
-        click.echo("Failed to fetch emails. Server refused tbe connection")
-        return
-
-    if not resp.status_code == 200:
-        click.echo("GET /emails failed")
-        click.echo("Status code:", resp.status_code)
-        click.echo(resp.text)
-        return
+        api_client = get_client()
+        emails = api_client.get_emails()
+    except Exception as e:
+        click.echo("Fetching emails failed with:")
+        sys.exit(e)
 
     table = prettytable.PrettyTable()
     table.field_names = ["Id", "Sender", "Status", "Reason",
                          "Created", "Updated", "Sending Attempts"]
-    emails = resp.json()
     for email in emails:
         table.add_row([email["id"], email["sender"], email["status"],
                        email["reason"], email["created_at"],
@@ -42,21 +42,13 @@ def get():
 @click.option("-s", "--show-body", is_flag=True, default=False,
               help="Display the entire body, regardless of length")
 def show(email_id, show_body):
-    headers = {"Accept": "application/json"}
     try:
-        resp = requests.get("http://127.0.0.1:5000/emails/{}".format(email_id),
-                            headers=headers)
-    except requests.exceptions.ConnectionError:
-        click.echo("Failed to fetch emails. Server refused tbe connection")
-        return
+        api_client = get_client()
+        email = api_client.get_email_by_id(email_id)
+    except Exception as e:
+        click.echo("Fetching emails failed with:")
+        sys.exit(e)
 
-    if not resp.status_code == 200:
-        click.echo("GET /emails/{} failed".format(email_id))
-        click.echo("Status code:", resp.status_code)
-        click.echo(resp.text)
-        return
-
-    email = resp.json()
     table = prettytable.PrettyTable()
     table.field_names = ["Field", "Entry"]
     table.add_row(["ID", email["id"]])
@@ -78,22 +70,13 @@ def show(email_id, show_body):
 @email_cli.command(help="Show recipient status of a single email")
 @click.argument("email_id")
 def get_recipients(email_id):
-    headers = {"Accept": "application/json"}
     try:
-        resp = requests.get(
-            "http://127.0.0.1:5000/emails/{}/recipients".format(email_id),
-            headers=headers)
-    except requests.exceptions.ConnectionError:
-        click.echo("Failed to fetch emails. Server refused tbe connection")
-        return
+        api_client = get_client()
+        recipients = api_client.get_email_recipients(email_id)
+    except Exception as e:
+        click.echo("Fetching recipients failed with:")
+        sys.exit(e)
 
-    if not resp.status_code == 200:
-        click.echo("GET /emails/{}/recipients failed".format(email_id))
-        click.echo("Status code:", resp.status_code)
-        click.echo(resp.text)
-        return
-
-    recipients = resp.json()
     table = prettytable.PrettyTable()
     table.field_names = ["Recipient", "Type", "Reason"]
     for recipient in recipients:
@@ -123,27 +106,18 @@ def send(sender, to, cc, bcc, subject, body):
     with open(body, 'r') as f:
         email_body = "".join(f.readlines())
 
-    to = list(to)
-    data = json.dumps({"subject": subject, "from": sender,
-                       "to": to, "cc": cc, "bcc": bcc, "body": email_body})
-    headers = {"Content-Type": "application/json",
-               "Accept": "application/json"}
     try:
-        resp = requests.post("http://127.0.0.1:5000/emails", headers=headers,
-                             data=data)
-    except requests.exceptions.ConnectionError:
-        click.echo("Failed to fetch emails. Server refused tbe connection")
-        return
+        api_client = get_client()
+        email = api_client.create_email(subject, sender, to, cc, bcc, email_body)
+    except Exception as e:
+        click.echo("Creating an email failed with:")
+        sys.exit(e)
 
-    if not resp.status_code == 200:
-        click.echo("POST /emails failed")
-        click.echo("Status code:", resp.status_code)
-        click.echo(resp.text)
-    email = resp.json()
     click.echo("Email from '{}' to '{}' with id {} queued "
-               "for delivery".format(email["sender"],
-                                     ", ".join([e["address"] for e in email["recipients"]]),
-                                     email["id"]))
+               "for delivery".format(
+                   email["sender"],
+                   ", ".join([e["address"] for e in email["recipients"]]),
+                   email["id"]))
 
 
 def main():

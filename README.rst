@@ -32,6 +32,9 @@ To kick off the compose environment, simply run the following from the root of y
 
     make run && make logs
 
+Docker-compose will build two containers and fetch two additional ones which may take a while depending on your connection. Once it's done, you
+should have a running environment.
+
 To stop all of the running containers, CTRL+C out of the running log output and then:
 
 .. code-block:: bash
@@ -141,6 +144,8 @@ and will have the subject "Dinner plans":
 
     mailgun_cli send bob@mailgun.com --body ../body.txt -t matt@mailgun.com -c emily@mailgun.com --bcc frank@mailgun.com -s "Dinner plans"
 
+If your email sends successfully through (watch the docker logs and try out the CLI) then you can open up your local Mailhog instance in your browser to see it. Simply go to http://127.0.0.1:8025 in your browser to check it out.
+
 ==============================
 Setting up to run Python Tests
 ==============================
@@ -186,6 +191,13 @@ From your clone root:
 .. code-block:: bash
 
     make go_tests
+
+===========================
+Manually Testing The Worker
+===========================
+
+Mailhog exposes some lovely levers for testing out the robustness of your SMTP client implementation. I've added a commented
+out section in the docker-compose.yml file called "failhog" for trying some of them out. See the `Jim <https://github.com/mailhog/MailHog/blob/master/docs/JIM.md>`_ documentation on the Mailhog site for more details
 
 ===========
 The Project
