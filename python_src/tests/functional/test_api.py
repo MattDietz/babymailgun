@@ -1,10 +1,10 @@
 import datetime
-from dateutil import parser
 import os
 
+from dateutil import parser
 import pytest
 
-from babymailgun import client
+from babymailgun import app, client
 import tests
 
 
@@ -88,3 +88,54 @@ class TestAPI(tests.TestBase):
             pass
         except Exception as e:
             pytest.fail("Expected NotFound, instead got {}".format(e))
+
+
+class TestCreateMailRobustness(tests.TestBase):
+    @pytest.fixture()
+    def api_client(self):
+        host = os.environ.get("API_HOST", "127.0.0.1")
+        port = os.environ.get("API_PORT", "5000")
+        return client.MailgunAPIClient(host, port)
+
+    @pytest.fixture()
+    def email_dict(self):
+        email_dict = {"subject": "Subject",
+                      "email_body": "buffalo" * 8,
+                      "to": ["to@unittests.com"],
+                      "cc": ["cc@unittests.com"],
+                      "bcc": ["bcc@unittests.com"],
+                      "sender": "from@tester.me"}
+        return email_dict
+
+    def test_create_email_subject_too_long(self, api_client, email_dict):
+        email_dict["subject"] = "A" * (app.MAX_SUBJECT_LENGTH + 1)
+        with pytest.raises(client.CreateFailure):
+            api_client.create_email(**email_dict)
+
+    def test_validate_email_too_many_recipients(self, api_client, email_dict):
+        email_dict["to"] = ["to@unittests.com"] * 50
+        email_dict["cc"] = ["cc@unittests.com"] * 50
+        email_dict["bcc"] = ["bcc@unittests.com"] * 50
+
+        with pytest.raises(client.CreateFailure):
+            api_client.create_email(**email_dict)
+
+    def test_validate_email_invalid_subject(self, api_client, email_dict):
+        email_dict["subject"] = "{}"
+        with pytest.raises(client.CreateFailure):
+            api_client.create_email(**email_dict)
+
+    def test_validate_email_invalid_sender(self, api_client, email_dict):
+        email_dict["sender"] = "fffffffffffffff"
+        with pytest.raises(client.CreateFailure):
+            api_client.create_email(**email_dict)
+
+    def test_validate_email_invalid_recipient(self, api_client, email_dict):
+        email_dict["to"] = ["tsad;kfjasdfkjqwfg"]
+        with pytest.raises(client.CreateFailure):
+            api_client.create_email(**email_dict)
+
+    def test_validate_email_body_too_long(self, api_client, email_dict):
+        email_dict["email_body"] = "A" * (app.MAX_BODY_LENGTH + 1)
+        with pytest.raises(client.CreateFailure):
+            api_client.create_email(**email_dict)

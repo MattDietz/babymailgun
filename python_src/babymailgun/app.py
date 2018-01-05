@@ -1,9 +1,18 @@
 import datetime
 import os
+import re
 import uuid
 
 import flask
 import pymongo
+
+MAX_RECIPIENTS = 100
+MAX_SUBJECT_LENGTH = 255
+MAX_BODY_LENGTH = 16384
+
+# From http://emailregex.com/
+EMAIL_REGEX = re.compile(r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)")
+SUBJECT_REGEX = re.compile(r"^[a-zA-Z0-9 ]*$")
 
 
 class MailgunException(Exception):
@@ -17,7 +26,31 @@ class ConfigKeyNotFound(MailgunException):
 
 
 class ConfigTypeError(MailgunException):
-    message = ("The key '%(key)s' must be of type %(key_type)s")
+    message = "The key '%(key)s' must be of type %(key_type)s"
+
+
+class TooManyRecipients(MailgunException):
+    message = ("The number of recipients for any given email may not "
+               "exceed {}".format(MAX_RECIPIENTS))
+
+
+class SubjectTooLong(MailgunException):
+    message = ("The length of the subject may not exceed {} "
+               "characters".format(MAX_SUBJECT_LENGTH))
+
+
+class BodyTooLong(MailgunException):
+    message = ("The length of the body may not exceed {} "
+               "characters".format(MAX_BODY_LENGTH))
+
+
+class InvalidEmailAddress(MailgunException):
+    message = "The email '%(email)s' in the %(header)s header is invalid"
+
+
+class InvalidSubject(MailgunException):
+    message = ("The subject contains invalid characters. Only a-z, "
+               "A-Z and 0-9 are allowed")
 
 
 def get_env(key):
@@ -38,6 +71,36 @@ def setup_app():
         raise ConfigTypeError(key="DB_PORT", key_type="int")
 
     app.config["DB_NAME"] = get_env("DB_NAME")
+
+
+def validate_email(email_dict):
+    # these are not limits imposed by any RFC, but rather are
+    # here simply to keep things sane
+    to = email_dict["to"]
+    cc = email_dict["cc"]
+    bcc = email_dict["bcc"]
+    if len(to) + len(cc) + len(bcc) > MAX_RECIPIENTS:
+        raise TooManyRecipients()
+
+    if len(email_dict["subject"]) > MAX_SUBJECT_LENGTH:
+        raise SubjectTooLong()
+
+    if len(email_dict["body"]) > MAX_BODY_LENGTH:
+        raise BodyTooLong()
+
+    # I realize this is arbitrarily limiting, but for ease
+    # of printing on a command line I decided it was necessary/useful
+    if not SUBJECT_REGEX.match(email_dict["subject"]):
+        raise InvalidSubject()
+
+    if not EMAIL_REGEX.match(email_dict["from"]):
+        raise InvalidEmailAddress(email=email_dict["from"],
+                                  header="from")
+
+    for header in ["to", "cc", "bcc"]:
+        for email in email_dict[header]:
+            if not EMAIL_REGEX.match(email):
+                raise InvalidEmailAddress(email=email, header=header)
 
 
 def to_email_model(email_id, email_dict):
@@ -137,6 +200,11 @@ def send_email():
         return ("Invalid content-type or no content-type specified", 415)
 
     data = flask.request.get_json()
+
+    try:
+        validate_email(data)
+    except Exception as e:
+        return (str(e), 400)
 
     db = _get_db_client()
     email_id = str(uuid.uuid4())

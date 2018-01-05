@@ -102,3 +102,52 @@ class TestSetupApp(tests.TestBase):
 
         with pytest.raises(mailgun_app.ConfigTypeError):
             mailgun_app.setup_app()
+
+
+class TestValidateEmail(tests.TestBase):
+    @pytest.fixture()
+    def email_dict(self):
+        email_dict = {"subject": "Subject",
+                      "body": "buffalo" * 8,
+                      "to": ["to@unittests.com"],
+                      "cc": ["cc@unittests.com"],
+                      "bcc": ["bcc@unittests.com"],
+                      "from": "from@tester.me"}
+        return email_dict
+
+    def test_validate_email(self, email_dict):
+        with self.not_raises():
+            mailgun_app.validate_email(email_dict)
+
+    def test_validate_email_subject_too_long(self, email_dict):
+        email_dict["subject"] = "A" * (mailgun_app.MAX_SUBJECT_LENGTH + 1)
+        with pytest.raises(mailgun_app.SubjectTooLong):
+            mailgun_app.validate_email(email_dict)
+
+    def test_validate_email_too_many_recipients(self, email_dict):
+        email_dict["to"] = ["to@unittests.com"] * 50
+        email_dict["cc"] = ["cc@unittests.com"] * 50
+        email_dict["bcc"] = ["bcc@unittests.com"] * 50
+
+        with pytest.raises(mailgun_app.TooManyRecipients):
+            mailgun_app.validate_email(email_dict)
+
+    def test_validate_email_invalid_subject(self, email_dict):
+        email_dict["subject"] = "{}"
+        with pytest.raises(mailgun_app.InvalidSubject):
+            mailgun_app.validate_email(email_dict)
+
+    def test_validate_email_invalid_sender(self, email_dict):
+        email_dict["from"] = "fffffffffffffff"
+        with pytest.raises(mailgun_app.InvalidEmailAddress):
+            mailgun_app.validate_email(email_dict)
+
+    def test_validate_email_invalid_recipient(self, email_dict):
+        email_dict["to"] = ["tsad;kfjasdfkjqwfg"]
+        with pytest.raises(mailgun_app.InvalidEmailAddress):
+            mailgun_app.validate_email(email_dict)
+
+    def test_validate_email_body_too_long(self, email_dict):
+        email_dict["body"] = "A" * (mailgun_app.MAX_BODY_LENGTH + 1)
+        with pytest.raises(mailgun_app.BodyTooLong):
+            mailgun_app.validate_email(email_dict)
