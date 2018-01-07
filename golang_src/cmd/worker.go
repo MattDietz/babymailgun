@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"github.com/cerberus98/babymailgun"
 	"github.com/spf13/viper"
@@ -27,7 +28,7 @@ type WorkerConfig struct {
 }
 
 const (
-	InvalidRecipientError    string = "550 Invalid recipient"
+	InvalidRecipientError    string = "550 Invalid Recipient"
 	UnrecognizedCommandError string = "500 Unrecognised command"
 	EOFError                 string = "EOF"
 )
@@ -44,6 +45,61 @@ func uuid() string {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+func ErrorToUpdateStatus(err error, cfg *WorkerConfig, emailUpdate *babymailgun.EmailUpdate) {
+	if err != nil {
+		errStr := err.Error()
+		fmt.Println("Email sending failed ", errStr)
+		errStr = strings.ToLower(errStr)
+
+		if strings.HasPrefix(errStr, strings.ToLower(InvalidRecipientError)) {
+			// This is a catastrophic failure. The server says our recipient doesn't exist
+			var failedEmail string
+			if len(errStr) == len(InvalidRecipientError) {
+				// Edge case: the recipient is an empty string
+				failedEmail = ""
+			} else {
+				failedEmail = errStr[len(InvalidRecipientError)+1:]
+			}
+			for _, rcpt := range emailUpdate.Recipients {
+				if rcpt.Address == failedEmail {
+					rcpt.Status = InvalidRecipientStatus
+					rcpt.Reason = InvalidRecipientError
+				}
+			}
+			emailUpdate.Status = babymailgun.StatusFailed
+			emailUpdate.Reason = babymailgun.ReasonInvalidRecipient
+		}
+
+		if strings.HasPrefix(errStr, strings.ToLower(UnrecognizedCommandError)) {
+			// This is an auth failure. This may be catastrophic, but we'll retry since it could
+			// be a function of load. In other words, we don't know how it's actually handling auth
+			// on the server side, and the referring service could be down temporarily
+			emailUpdate.Status = babymailgun.StatusIncomplete
+			emailUpdate.Reason = babymailgun.ReasonUnrecognizedCommand
+		}
+
+		if strings.HasPrefix(errStr, strings.ToLower(EOFError)) {
+			// this is potentially a temporary failure, and the message should be retried
+			emailUpdate.Status = babymailgun.StatusIncomplete
+			emailUpdate.Reason = babymailgun.ReasonEOF
+		}
+
+		if emailUpdate.Status == babymailgun.StatusIncomplete {
+			emailUpdate.Tries += 1
+			log.Printf("Email '%s' failed to send and has %d tries remaining. Reason: %s", emailUpdate.ID, cfg.SendRetries-emailUpdate.Tries, emailUpdate.Reason)
+			if emailUpdate.Tries >= cfg.SendRetries {
+				log.Printf("Tries exhausted. Marking email '%s' as failed", emailUpdate.ID)
+				emailUpdate.Status = babymailgun.StatusFailed
+			}
+		}
+	} else {
+		for _, rcpt := range emailUpdate.Recipients {
+			rcpt.Reason = "ok"
+		}
+		emailUpdate.Status = babymailgun.StatusComplete
+	}
 }
 
 func processingLoop(cfg *WorkerConfig, wg *sync.WaitGroup, quit <-chan bool) {
@@ -86,51 +142,8 @@ loop:
 				emailUpdate := babymailgun.EmailUpdate{}
 				emailUpdate.FromEmail(email)
 
-				if err = babymailgun.SendMail(smtpServer, email); err != nil {
-					fmt.Println("Email sending failed ", err)
-					errStr := err.Error()
-
-					if strings.HasPrefix(errStr, InvalidRecipientError) {
-						// This is a catastrophic failure. The server says our recipient doesn't exist
-						failedEmail := errStr[len(InvalidRecipientError)+1:]
-						for _, rcpt := range emailUpdate.Recipients {
-							if rcpt.Address == failedEmail {
-								rcpt.Status = InvalidRecipientStatus
-								rcpt.Reason = InvalidRecipientError
-							}
-						}
-						emailUpdate.Status = babymailgun.StatusFailed
-						emailUpdate.Reason = babymailgun.ReasonInvalidRecipient
-					}
-
-					if strings.HasPrefix(errStr, UnrecognizedCommandError) {
-						// This is an auth failure. This may be catastrophic, but we'll retry since it could
-						// be a function of load. In other words, we don't know how it's actually handling auth
-						// on the server side, and the referring service could be down temporarily
-						emailUpdate.Status = babymailgun.StatusIncomplete
-						emailUpdate.Reason = babymailgun.ReasonUnrecognizedCommand
-					}
-
-					if strings.HasPrefix(errStr, EOFError) {
-						// this is potentially a temporary failure, and the message should be retried
-						emailUpdate.Status = babymailgun.StatusIncomplete
-						emailUpdate.Reason = babymailgun.ReasonEOF
-					}
-
-					if emailUpdate.Status == babymailgun.StatusIncomplete {
-						emailUpdate.Tries = email.Tries + 1
-						log.Printf("Email '%s' failed to send and has %d tries remaining. Reason: %s", email.ID, cfg.SendRetries-emailUpdate.Tries, emailUpdate.Reason)
-						if emailUpdate.Tries >= cfg.SendRetries {
-							log.Printf("Tries exhausted. Marking email '%s' as failed", email.ID)
-							emailUpdate.Status = babymailgun.StatusFailed
-						}
-					}
-				} else {
-					for _, rcpt := range emailUpdate.Recipients {
-						rcpt.Reason = "ok"
-					}
-					emailUpdate.Status = babymailgun.StatusComplete
-				}
+				err = babymailgun.SendMail(smtpServer, email)
+				ErrorToUpdateStatus(err, cfg, &emailUpdate)
 
 				// Process the email response to see if any recipients failed and create
 				// and update document. Additionally, "release" the email by setting the
@@ -154,7 +167,7 @@ loop:
 	log.Println("Finishing up...")
 }
 
-func loadConfig() *WorkerConfig {
+func loadConfig() (*WorkerConfig, error) {
 	viper.BindEnv("DB_HOST")
 	viper.BindEnv("DB_PORT")
 	viper.BindEnv("DB_NAME")
@@ -168,7 +181,7 @@ func loadConfig() *WorkerConfig {
 	viper.SetDefault("WORKER_SLEEP", 10)
 	viper.SetDefault("WORKER_POOL", 5)
 	viper.SetDefault("CONNECTION_RETRIES", 3)
-	viper.SetDefault("CONNECTION_TIMEOUT", 5)
+	viper.SetDefault("CONNECTION_TIMEOUT", 30)
 	viper.SetDefault("SEND_RETRIES", 3)
 	viper.SetDefault("SEND_RETRY_INTERVAL", 600) // in seconds
 
@@ -179,11 +192,14 @@ func loadConfig() *WorkerConfig {
 		}
 	}
 	if len(missing_keys) > 0 {
-		log.Fatal(fmt.Sprintf("Can't find necessary environment variable(s): %s", strings.Join(missing_keys, ", ")))
+		return nil, errors.New(fmt.Sprintf("Can't find necessary environment variable(s): %s", strings.Join(missing_keys, ", ")))
 	}
 
-	// TODO We need bounds on some of the above variables
-
+	for _, key := range []string{"WORKER_SLEEP", "WORKER_POOL", "CONNECTION_RETRIES", "CONNECTION_TIMEOUT", "SEND_RETRIES", "SEND_RETRY_INTERVAL"} {
+		if viper.GetInt(key) <= 0 {
+			return nil, errors.New(fmt.Sprintf("Config %s must have a value >= 0", key))
+		}
+	}
 	return &WorkerConfig{
 		Host:              viper.GetString("db_host"),
 		Port:              viper.GetString("db_port"),
@@ -194,12 +210,15 @@ func loadConfig() *WorkerConfig {
 		ConnectionTimeout: viper.GetInt("connection_timeout"),
 		SendRetries:       viper.GetInt("send_retries"),
 		SendRetryInterval: viper.GetInt("send_retry_interval"),
-	}
+	}, nil
 }
 
 func main() {
 	log.Println("Running worker")
-	workerConfig := loadConfig()
+	workerConfig, err := loadConfig()
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 

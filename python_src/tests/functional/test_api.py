@@ -135,6 +135,11 @@ class TestCreateMailRobustness(tests.TestBase):
         with pytest.raises(client.CreateFailure):
             api_client.create_email(**email_dict)
 
+    def test_validate_email_blank_recipient(self, api_client, email_dict):
+        email_dict["to"] = [""]
+        with pytest.raises(client.CreateFailure):
+            api_client.create_email(**email_dict)
+
     def test_validate_email_body_too_long(self, api_client, email_dict):
         email_dict["email_body"] = "A" * (app.MAX_BODY_LENGTH + 1)
         with pytest.raises(client.CreateFailure):

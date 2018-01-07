@@ -12,14 +12,15 @@ import (
 	"time"
 )
 
-const (
-	RecipientTo  = "to"
-	RecipientCC  = "cc"
-	RecipientBCC = "bcc"
-)
-
 type EmailStatus string
 type EmailReason string
+type RecipientType string
+
+const (
+	RecipientTo  RecipientType = "to"
+	RecipientCC  RecipientType = "cc"
+	RecipientBCC RecipientType = "bcc"
+)
 
 const (
 	StatusComplete   EmailStatus = "complete"
@@ -33,18 +34,18 @@ const (
 	ReasonEOF                 EmailReason = "The server disconnected while trying to transmit the email"
 )
 
-type EmailRecipients struct {
+type EmailRecipient struct {
 	Address string
 	Status  int
 	Reason  string
-	Type    string
+	Type    RecipientType
 }
 
 type Email struct {
 	ID         string `_id`
 	Subject    string
 	Body       string
-	Recipients []EmailRecipients
+	Recipients []EmailRecipient
 	MailFrom   string `sender`
 	CreatedAt  string // Go to Golang date
 	UpdatedAt  string // Go to Golang date
@@ -55,7 +56,8 @@ type Email struct {
 }
 
 type EmailUpdate struct {
-	Recipients []EmailRecipients
+	ID         string
+	Recipients []EmailRecipient
 	Status     EmailStatus
 	Reason     EmailReason
 	Tries      int
@@ -96,6 +98,7 @@ var (
 )
 
 func (e *EmailUpdate) FromEmail(email *Email) {
+	e.ID = email.ID
 	e.Tries = email.Tries
 	e.Status = email.Status
 	e.Reason = email.Reason
@@ -137,20 +140,18 @@ func (m *MongoClient) GetSMTPServer() (*SMTPServer, error) {
 	return server, nil
 }
 
-func (e *Email) FormattedMessage() ([]byte, error) {
+func (e *Email) FormattedMessage() []byte {
 	var bodyBytes bytes.Buffer
 	bodyBytes.WriteString(fmt.Sprintf("From: %s\r\n", e.MailFrom))
 	var toRecipients, ccRecipients []string
 
 	for _, recipient := range e.Recipients {
-		switch strings.ToLower(recipient.Type) {
+		switch recipient.Type {
 		case RecipientTo:
 			toRecipients = append(toRecipients, recipient.Address)
 		case RecipientCC:
 			ccRecipients = append(ccRecipients, recipient.Address)
 		case RecipientBCC:
-		default:
-			return nil, InvalidRecipientError
 		}
 	}
 	if len(toRecipients) > 0 {
@@ -162,7 +163,7 @@ func (e *Email) FormattedMessage() ([]byte, error) {
 	bodyBytes.WriteString(fmt.Sprintf("Subject: %s\r\n", e.Subject))
 	bodyBytes.WriteString("\r\n")
 	bodyBytes.WriteString(e.Body)
-	return bodyBytes.Bytes(), nil
+	return bodyBytes.Bytes()
 }
 
 func (m *MongoClient) dial() (*mgo.Session, error) {
@@ -249,13 +250,9 @@ func (m *MongoClient) UpdateEmail(email *Email, emailUpdate *EmailUpdate) error 
 		return err
 	}
 
-	// TODO findAndModify only updates one document and single-document
-	//			updates are atomic, but is this safe enough? We're doing a
-	//			compare and swap of sorts (find with specific keys and replace)
 	emailCollection := session.DB(m.Config.DatabaseName).C("emails")
 	err = emailCollection.Update(
 		bson.M{"_id": email.ID},
-		// TODO This status has to be provided by the calling function
 		bson.M{"$set": bson.M{
 			"worker_id":  nil,
 			"tries":      emailUpdate.Tries,

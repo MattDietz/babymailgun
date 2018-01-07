@@ -2,7 +2,6 @@ DOCKER := docker
 DOCKER_COMPOSE := docker-compose -f
 SUDO := sudo
 
-
 help: # Display help
 	@awk -F ':|##' \
 		'/^[^\t].+?:.*?##/ {\
@@ -32,6 +31,9 @@ logs : ## Helper for connecting to the docker-compose log output
 
 python_tests : ## Helper for running the python tests
 	@cd python_src && tox
+
+golang_tests : ## Helper for kicking off the golang tests
+	@cd golang_src && go test -cover -v ./ ./cmd
  
 functional_tests : ## Helper for running the functional test suite
 	@cd python_src && tox -e functional

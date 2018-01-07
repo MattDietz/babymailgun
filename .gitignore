@@ -123,4 +123,4 @@ ENV/
 
 ##### Project things #####
 mongo_data/
-golang_src/worker
+worker

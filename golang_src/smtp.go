@@ -17,11 +17,8 @@ func SendMail(smtpServer *SMTPServer, email *Email) error {
 		sendTo = append(sendTo, recipient.Address)
 	}
 
-	message, err := email.FormattedMessage()
-	if err != nil {
-		return err
-	}
-	err = smtp.SendMail(hostPort, auth, email.MailFrom, sendTo, message)
+	message := email.FormattedMessage()
+	err := smtp.SendMail(hostPort, auth, email.MailFrom, sendTo, message)
 	if err != nil {
 		return err
 	}

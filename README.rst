@@ -177,16 +177,28 @@ Then:
 Running Python Tests
 ====================
 
+In the same path as the Makefile
+
 .. code-block:: bash
 
     make python_tests
+
+====================
+Running Go Tests
+====================
+
+In the same path as the Makefile
+
+.. code-block:: bash
+
+    make golang_Tests
 
 
 ========================
 Running Functional Tests
 ========================
 
-From your clone root:
+From your clone root, first ensure the compose environment is running. Then:
 
 .. code-block:: bash
 

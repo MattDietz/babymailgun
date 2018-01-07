@@ -15,6 +15,7 @@ RUN go get github.com/spf13/viper
 RUN go get gopkg.in/mgo.v2
 RUN go get gopkg.in/mgo.v2/bson
 RUN go build cmd/worker.go
+RUN go test -cover -v ./ ./cmd
 
 CMD ["./worker"]
 
