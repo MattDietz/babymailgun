@@ -13,7 +13,7 @@ run :  ## docker compose everything
 	@echo "run 'make logs' to connect to docker log output"
 
 install_python : ## Sets up python deps in a venv so you can use the CLI
-	@pip install -r python_src/requirements.txt
+	@pip install -r python_src/requirements.txt -r python_src/test-requirements.txt
 	@pip install -e python_src
 	@cd python_src/ && tox
 
