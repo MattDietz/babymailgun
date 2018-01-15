@@ -8,14 +8,12 @@ RUN export DOCKERIZE_VERSION=v0.3.0 && wget https://github.com/jwilder/dockerize
     && tar -C /usr/local/bin -xzvf dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz \
         && rm dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz
 
-ADD . /worker
-RUN mkdir -p /go/src/github.com/cerberus98
-RUN ln -s /worker /go/src/github.com/cerberus98/babymailgun
+ADD . /go/src/github.com/cerberus98/babymailgun/golang_src/
 RUN go get github.com/spf13/viper
 RUN go get gopkg.in/mgo.v2
 RUN go get gopkg.in/mgo.v2/bson
-RUN go build cmd/worker.go
-RUN go test -cover -v ./ ./cmd
+RUN go build github.com/cerberus98/babymailgun/golang_src/cmd
+RUN mv cmd /worker/worker
+RUN go test -cover -v github.com/cerberus98/babymailgun/golang_src/ github.com/cerberus98/babymailgun/golang_src/cmd
 
 CMD ["./worker"]
-

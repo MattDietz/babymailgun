@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/cerberus98/babymailgun"
+	"github.com/cerberus98/babymailgun/golang_src"
 	"github.com/spf13/viper"
 	"log"
 	"os"
@@ -121,7 +121,7 @@ loop:
 	for {
 		select {
 		case <-quit:
-			log.Printf("Worker goroutine received quit")
+			log.Println("Worker goroutine received quit")
 			mongoClient.CleanUp()
 			break loop
 		default:
@@ -224,22 +224,17 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// Workers signal on this when they quit to let the parent know they've exited
-	var quitChannels []chan bool
+	// The parent closes this channel which lets the workers know to exit
+	quitChannel := make(chan bool)
 	for i := 0; i < workerConfig.WorkerPool; i++ {
-		quit := make(chan bool, 1)
-		defer close(quit)
-		quitChannels = append(quitChannels, quit)
-		go processingLoop(workerConfig, &wg, quitChannels[i])
+		go processingLoop(workerConfig, &wg, quitChannel)
 		wg.Add(1)
 	}
 
 	select {
 	case <-sigs:
 		log.Printf("Received quit")
-		for i := 0; i < workerConfig.WorkerPool; i++ {
-			quitChannels[i] <- true
-		}
+		close(quitChannel)
 	}
 	log.Println("Waiting for workers to exit...")
 	wg.Wait()

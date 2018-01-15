@@ -2,7 +2,7 @@ package main
 
 import (
 	"errors"
-	"github.com/cerberus98/babymailgun"
+	"github.com/cerberus98/babymailgun/golang_src"
 	"github.com/spf13/viper"
 	"strings"
 	"testing"
