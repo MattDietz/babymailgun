@@ -1,0 +1,45 @@
+version: '3.3'
+services:
+  worker:
+    build: ./golang_src
+    environment:
+      - DB_HOST=database
+      - DB_PORT=27017
+      - DB_NAME=babymailgun
+    depends_on:
+     - database
+    command: dockerize -timeout 60s -wait tcp://database:27017 ./worker
+  mailgun_api:
+    build: ./python_src
+    environment:
+      - FLASK_APP=babymailgun/app.py
+      - FLASK_DEBUG=1
+      - DB_HOST=database
+      - DB_PORT=27017
+      - DB_NAME=babymailgun
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./python_src/babymailgun:/code/babymailgun
+    depends_on:
+     - database
+    command: ./api_entrypoint.sh
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+  database:
+    image: mongo:3.2
+    ports:
+      - "27017:27017"
+  # NOTE Don't enable both Mailhog and Failhog at the same time. They both attach to the same port.
+  # To try out some of the robustness features of the project, comment out Mailhog, uncomment
+  # Failhog below, and try changing some of the values in the "command:" section
+  # See also: https://github.com/mailhog/MailHog/blob/master/docs/JIM.md
+  #failhog:
+  #  image: mailhog/mailhog
+  #  ports:
+  #    - "1025:1025"
+  #    - "8025:8025"
+  #  command: ["-invite-jim", "-jim-accept=1", "-jim-reject-recipient=0.0", "-jim-disconnect=0.1"]
